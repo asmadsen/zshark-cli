@@ -3,4 +3,6 @@
 /dist/
 *.pcap
 *.pcapng
+*.test
+coverage.out
 .DS_Store

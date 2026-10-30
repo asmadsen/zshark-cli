@@ -49,6 +49,29 @@ func TestCaptureChannelValidation(t *testing.T) {
 	}
 }
 
+func TestCaptureChannelBoundsAccepted(t *testing.T) {
+	for channel, want := range map[string]int{"11": 11, "26": 26} {
+		cfg, err := parseCaptureArgs([]string{"--channel", channel}, &bytes.Buffer{})
+		if err != nil {
+			t.Errorf("channel %s rejected: %v", channel, err)
+			continue
+		}
+		if cfg.Channel != want {
+			t.Errorf("channel = %d, want %d", cfg.Channel, want)
+		}
+	}
+}
+
+func TestCaptureIPv6Destination(t *testing.T) {
+	cfg, err := parseCaptureArgs([]string{"--dest", "[::1]:17754"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("IPv6 destination rejected: %v", err)
+	}
+	if cfg.Dest != "[::1]:17754" {
+		t.Errorf("dest = %q", cfg.Dest)
+	}
+}
+
 func TestCaptureDestValidation(t *testing.T) {
 	for _, dest := range []string{"127.0.0.1", ":17754", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:abc"} {
 		if _, err := parseCaptureArgs([]string{"--dest", dest}, &bytes.Buffer{}); err == nil {
@@ -90,6 +113,9 @@ func TestHelpIsNotAnError(t *testing.T) {
 	_, err := parseCaptureArgs([]string{"--help"}, &bytes.Buffer{})
 	if !errorsIsHelp(err) {
 		t.Fatalf("error = %v, want flag.ErrHelp", err)
+	}
+	if _, err := parseListArgs([]string{"--help"}, &bytes.Buffer{}); !errorsIsHelp(err) {
+		t.Fatalf("list error = %v, want flag.ErrHelp", err)
 	}
 }
 

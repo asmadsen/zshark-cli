@@ -3,6 +3,8 @@ package sink_test
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -181,6 +183,62 @@ func TestPcapngRejectsShortPacket(t *testing.T) {
 	defer w.Close()
 	if err := w.Write([]byte{1, 2, 3}); err == nil {
 		t.Fatal("short ZEP packet accepted")
+	}
+}
+
+func TestPcapngFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	w, err := sink.NewPcapngFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := zep.Build([]byte{0x61, 0x88, 0x00}, 15, time.Unix(1700000000, 250000000), 9)
+	if err := w.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := splitBlocks(t, data)
+	if len(blocks) != 3 {
+		t.Fatalf("blocks = %d, want SHB, IDB, EPB", len(blocks))
+	}
+	frame := sink.EthernetFrame(packet)
+	epb := blocks[2]
+	if got := int(binary.LittleEndian.Uint32(epb[20:24])); got != len(frame) {
+		t.Errorf("captured length = %d, want %d", got, len(frame))
+	}
+	if !bytes.Equal(epb[28:28+len(frame)], frame) {
+		t.Error("EPB payload differs from EthernetFrame")
+	}
+}
+
+func TestPcapngTimestampRoundsToNextSecond(t *testing.T) {
+	var out bytes.Buffer
+	w, err := sink.NewPcapng(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := zep.Build(nil, 11, time.Unix(1700000000, 999999999), 1)
+	if err := w.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	blocks := splitBlocks(t, out.Bytes())
+	epb := blocks[2]
+	got := uint64(binary.LittleEndian.Uint32(epb[12:16]))<<32 | uint64(binary.LittleEndian.Uint32(epb[16:20]))
+	if want := uint64(1700000001) * 1_000_000; got != want {
+		t.Errorf("timestamp = %d, want %d", got, want)
 	}
 }
 

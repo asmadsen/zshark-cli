@@ -2,9 +2,36 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"zshark/internal/serialport"
 )
+
+func TestRunNoArguments(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := run(nil, &bytes.Buffer{}, &stderr); code != exitUsage {
+		t.Errorf("exit = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "usage: zshark") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunListJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"list", "--json"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+	}
+	var devices []serialport.Device
+	if err := json.Unmarshal(stdout.Bytes(), &devices); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if devices == nil {
+		t.Error("JSON output is null, want an array")
+	}
+}
 
 func TestRunUnknownCommand(t *testing.T) {
 	var stderr bytes.Buffer
