@@ -152,6 +152,7 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		started := time.Now()
 		parser := proto.NewParser()
 		if err := startSniff(ctx, port, parser, cfg.Channel, log, stats); err != nil {
+			log.verbosef("-> idle (startup failure)")
 			_ = serialport.WriteCommand(port, proto.CmdIdle)
 			_ = port.Close()
 			if ctx.Err() != nil {
@@ -177,6 +178,7 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		log.verbosef("starting sniff on channel %d", cfg.Channel)
 
 		readErr := readLoop(ctx, port, parser, &seq, pcapSink, udpSink, stats, log)
+		log.verbosef("-> idle (shutdown)")
 		_ = serialport.WriteCommand(port, proto.CmdIdle)
 		_ = port.Close()
 
@@ -208,18 +210,22 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 }
 
 func startSniff(ctx context.Context, port serial.Port, parser *proto.Parser, channel int, log *captureLogger, stats *captureStats) error {
+	log.verbosef("-> idle")
 	if err := serialport.WriteCommand(port, proto.CmdIdle); err != nil {
 		return fmt.Errorf("send idle: %w", err)
 	}
+	log.verbosef("-> parms")
 	if err := serialport.WriteCommand(port, proto.CmdParms); err != nil {
 		return fmt.Errorf("send parms: %w", err)
 	}
 	if err := waitBanner(ctx, port, parser, log, stats); err != nil {
 		return err
 	}
+	log.verbosef("-> chan %d", channel)
 	if err := serialport.WriteCommand(port, proto.CmdChannel(channel)); err != nil {
 		return fmt.Errorf("send channel: %w", err)
 	}
+	log.verbosef("-> sniff")
 	if err := serialport.WriteCommand(port, proto.CmdSniff); err != nil {
 		return fmt.Errorf("send sniff: %w", err)
 	}
