@@ -178,7 +178,7 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		everOpened = true
 		log.verbosef("starting sniff on channel %d", cfg.Channel)
 
-		readErr := readLoop(ctx, port, parser, &seq, pcapSink, udpSink, stats, log)
+		readErr := readLoop(ctx, port, parser, &seq, cfg.Channel, pcapSink, udpSink, stats, log)
 		log.verbosef("-> idle (shutdown)")
 		_ = serialport.WriteCommand(port, proto.CmdIdle)
 		_ = port.Close()
@@ -289,7 +289,7 @@ func isSnifferBanner(line string) bool {
 	return strings.Contains(line, "Sniffer") || strings.Contains(line, "PLATFORM:")
 }
 
-func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, pcapSink *sink.Pcapng, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
+func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, channel int, pcapSink *sink.Pcapng, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
 	buf := make([]byte, 4096)
 	lastStats := time.Now()
 	for {
@@ -330,8 +330,7 @@ func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *
 				log.verbosef("skipping frame with %d data bytes", len(data))
 				continue
 			}
-			channel := frame.Channel()
-			packet := zep.BuildNTP(data, channel, zep.NTPTime(time.Now()), *seq)
+			packet := zep.BuildNTP(data, byte(channel), zep.NTPTime(time.Now()), *seq)
 			thisSeq := *seq
 			(*seq)++
 			log.verbosef("frame channel=%d len=%d seq=%d", channel, len(data), thisSeq)

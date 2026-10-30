@@ -82,16 +82,21 @@ next `0x01`.
 
 ### PAYLOAD layout
 
-The payload starts with an 8-byte metadata prefix followed by the raw 802.15.4
-frame. `Connection::sendZepPacket` (`0x24ac8`) uses `PAYLOAD[4]` as the channel:
-on the sample it is `0x0b` and Wireshark reports ZEP channel 11. **Observed**
+The payload starts with a fixed 8-byte header followed by the raw 802.15.4
+frame. On the live ConBee II the header is always `01 02 03 04 05 06 07 08`,
+regardless of the selected channel: 18 frames captured on channels 11 and 15
+all carried it, and byte 4 was constant `0x05`. It therefore does not encode
+the channel (and `0x05` is not a valid 802.15.4 channel). The channel is
+host-side state — the GUI's selected channel, or `--channel` — and belongs in
+the ZEP header. **Observed** (live, 2026-10-30)
 
-The meaning of the other prefix bytes (LQI, device code, flags) is
-**unconfirmed**. For v0 only the channel is required; the rest can be zeroed,
-but the raw frame must start at offset 8.
+Offset 8 is confirmed by the frame control field at the start of the raw frame:
+`02 00` (ACK) and `41 88`/`61 88` (data frames with PAN compression and
+extended source addresses) are all sane. **Observed**
 
-> Validate in step 1: dump the serial stream while the original app captures,
-> then confirm `LEN`, the offset of the 802.15.4 frame and the prefix fields.
+The earlier reading that `PAYLOAD[4]` is the channel came from the sample ZEP
+header, not from the serial stream; that datagram was built by the GUI from its
+own channel setting.
 
 ## 4. ZEP v2 datagrams (host → Wireshark)
 

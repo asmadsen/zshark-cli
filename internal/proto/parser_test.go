@@ -17,20 +17,16 @@ func envelope(payload []byte) []byte {
 	return b
 }
 
-func payload(channel byte, frame ...byte) []byte {
+func payload(frame ...byte) []byte {
 	p := make([]byte, proto.MetadataLen+len(frame))
-	p[0] = 0xde
-	p[1] = 0xad
-	p[2] = 0xbe
-	p[3] = 0xef
-	p[4] = channel
+	copy(p, []byte{1, 2, 3, 4, 5, 6, 7, 8})
 	copy(p[proto.MetadataLen:], frame)
 	return p
 }
 
 func TestParseFrameWithText(t *testing.T) {
 	p := proto.NewParser()
-	stream := append([]byte("Sniffer V1.0 [ConBee II]\r\nChannel 11\n"), envelope(payload(11, 0x61, 0x88, 0x00))...)
+	stream := append([]byte("Sniffer V1.0 [ConBee II]\r\nChannel 11\n"), envelope(payload(0x61, 0x88, 0x00))...)
 	res := p.Feed(stream)
 
 	if len(res.Frames) != 1 {
@@ -38,9 +34,6 @@ func TestParseFrameWithText(t *testing.T) {
 	}
 	if len(res.Errors) != 0 {
 		t.Fatalf("unexpected errors: %v", res.Errors)
-	}
-	if got, want := res.Frames[0].Channel(), byte(11); got != want {
-		t.Errorf("channel = %d, want %d", got, want)
 	}
 	if got, want := res.Frames[0].Data(), []byte{0x61, 0x88, 0x00}; !bytes.Equal(got, want) {
 		t.Errorf("data = %x, want %x", got, want)
@@ -58,8 +51,8 @@ func TestParseFrameWithText(t *testing.T) {
 
 func TestParseFramesSplitAcrossReads(t *testing.T) {
 	p := proto.NewParser()
-	stream := append([]byte("IDLE\r\n"), envelope(payload(15, 0x01, 0x02, 0x03))...)
-	stream = append(stream, envelope(payload(20, 0xaa))...)
+	stream := append([]byte("IDLE\r\n"), envelope(payload(0x01, 0x02, 0x03))...)
+	stream = append(stream, envelope(payload(0xaa))...)
 
 	var frames []proto.Frame
 	var text []string
@@ -74,11 +67,11 @@ func TestParseFramesSplitAcrossReads(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("frames = %d, want 2", len(frames))
 	}
-	if frames[0].Channel() != 15 || !bytes.Equal(frames[0].Data(), []byte{1, 2, 3}) {
-		t.Errorf("frame 0 = channel %d data %x", frames[0].Channel(), frames[0].Data())
+	if !bytes.Equal(frames[0].Data(), []byte{1, 2, 3}) {
+		t.Errorf("frame 0 data = %x", frames[0].Data())
 	}
-	if frames[1].Channel() != 20 || !bytes.Equal(frames[1].Data(), []byte{0xaa}) {
-		t.Errorf("frame 1 = channel %d data %x", frames[1].Channel(), frames[1].Data())
+	if !bytes.Equal(frames[1].Data(), []byte{0xaa}) {
+		t.Errorf("frame 1 data = %x", frames[1].Data())
 	}
 	if len(text) != 1 || text[0] != "IDLE" {
 		t.Errorf("text = %q, want [IDLE]", text)
@@ -98,7 +91,7 @@ func TestParseResyncAfterBadLength(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := proto.NewParser()
-			good := envelope(payload(11, 0x11, 0x22))
+			good := envelope(payload(0x11, 0x22))
 			res := p.Feed(append(append([]byte{}, tt.bad...), good...))
 
 			if len(res.Errors) == 0 {
@@ -120,7 +113,7 @@ func TestParseResyncAfterBadLength(t *testing.T) {
 func TestParseResyncAfterBadTerminator(t *testing.T) {
 	p := proto.NewParser()
 	bad := []byte{proto.StartByte, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0xff}
-	good := envelope(payload(26, 0x42))
+	good := envelope(payload(0x42))
 	res := p.Feed(append(bad, good...))
 
 	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0].Error(), "terminator") {
@@ -129,8 +122,8 @@ func TestParseResyncAfterBadTerminator(t *testing.T) {
 	if len(res.Frames) != 1 {
 		t.Fatalf("frames = %d, want 1 after resync", len(res.Frames))
 	}
-	if res.Frames[0].Channel() != 26 || !bytes.Equal(res.Frames[0].Data(), []byte{0x42}) {
-		t.Errorf("frame = channel %d data %x", res.Frames[0].Channel(), res.Frames[0].Data())
+	if !bytes.Equal(res.Frames[0].Data(), []byte{0x42}) {
+		t.Errorf("frame data = %x", res.Frames[0].Data())
 	}
 }
 
@@ -161,7 +154,7 @@ func TestParsePartialTextFlushedByFrame(t *testing.T) {
 	if res := p.Feed([]byte("Sniffer V1.0")); len(res.Text) != 0 {
 		t.Fatalf("unexpected text before newline: %q", res.Text)
 	}
-	res := p.Feed(envelope(payload(11, 0xaa, 0xbb)))
+	res := p.Feed(envelope(payload(0xaa, 0xbb)))
 	if len(res.Text) != 1 || res.Text[0] != "Sniffer V1.0" {
 		t.Fatalf("text = %q, want the partial banner line", res.Text)
 	}
@@ -223,13 +216,13 @@ func randomStream(rng *rand.Rand) []byte {
 		case 2:
 			frame := make([]byte, 1+rng.Intn(24))
 			_, _ = rng.Read(frame)
-			stream = append(stream, envelope(payload(byte(11+rng.Intn(16)), frame...))...)
+			stream = append(stream, envelope(payload(frame...))...)
 		case 3:
 			stream = append(stream, proto.StartByte, byte(rng.Intn(256)))
 		case 4:
 			stream = append(stream, proto.StartByte)
 		case 5:
-			bad := envelope(payload(11, 0xaa, 0xbb))
+			bad := envelope(payload(0xaa, 0xbb))
 			bad[len(bad)-1] = 0x00
 			stream = append(stream, bad...)
 		default:
@@ -263,7 +256,7 @@ func TestCommands(t *testing.T) {
 func TestParseMaxPayloadOverride(t *testing.T) {
 	p := proto.NewParser()
 	p.MaxPayload = 10
-	tooBig := payload(11, bytes.Repeat([]byte{0xaa}, 5)...)
+	tooBig := payload(bytes.Repeat([]byte{0xaa}, 5)...)
 	res := p.Feed(envelope(tooBig))
 	if len(res.Errors) == 0 {
 		t.Fatal("expected length error for payload larger than override")
@@ -280,8 +273,5 @@ func TestFrameShortPayload(t *testing.T) {
 	}
 	if f.Data() != nil {
 		t.Error("short payload returned data")
-	}
-	if f.Channel() != 0 {
-		t.Errorf("short payload channel = %d", f.Channel())
 	}
 }

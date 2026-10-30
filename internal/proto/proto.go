@@ -11,8 +11,9 @@ const (
 	EndByte   = 0x04
 )
 
-// MetadataLen is the number of bytes before the raw 802.15.4 frame in a
-// payload. Byte 4 of the payload is the channel.
+// MetadataLen is the number of bytes between the envelope length and the raw
+// 802.15.4 frame. The dongle emits the constant marker 01 02 03 04 05 06 07 08
+// here; it does not carry the selected channel.
 const MetadataLen = 8
 
 // DefaultMaxPayload is a conservative upper bound for the envelope length.
@@ -42,15 +43,6 @@ type Frame struct {
 // prefix.
 func (f Frame) Valid() bool {
 	return len(f.Payload) >= MetadataLen
-}
-
-// Channel returns the channel reported in metadata byte 4, or 0 for a short
-// payload.
-func (f Frame) Channel() byte {
-	if len(f.Payload) < 5 {
-		return 0
-	}
-	return f.Payload[4]
 }
 
 // Data returns the raw 802.15.4 frame that starts at payload offset 8.

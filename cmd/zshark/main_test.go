@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"go.bug.st/serial"
 
 	"zshark/internal/proto"
 	"zshark/internal/serialport"
+	"zshark/internal/sink"
+	"zshark/internal/zep"
 )
 
 func TestRunNoArguments(t *testing.T) {
@@ -81,11 +86,12 @@ func TestRunCaptureHelp(t *testing.T) {
 type scriptedPort struct {
 	serial.Port
 	data []byte
+	err  error
 }
 
 func (p *scriptedPort) Read(b []byte) (int, error) {
 	if len(p.data) == 0 {
-		return 0, nil
+		return 0, p.err
 	}
 	n := copy(b, p.data)
 	p.data = p.data[n:]
@@ -132,5 +138,53 @@ func TestIsSnifferBanner(t *testing.T) {
 		if isSnifferBanner(line) {
 			t.Errorf("isSnifferBanner(%q) = true, want false", line)
 		}
+	}
+}
+
+// TestReadLoopUsesSelectedChannel guards against deriving the ZEP channel from
+// the serial header: the dongle sends a constant 01 02 03 04 05 06 07 08 there,
+// while the actual channel comes from --channel.
+func TestReadLoopUsesSelectedChannel(t *testing.T) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer pc.Close()
+
+	udpSink, err := sink.NewUDP(pc.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("NewUDP: %v", err)
+	}
+	defer udpSink.Close()
+
+	frame := []byte{0x61, 0x88, 0x00}
+	stream := []byte{proto.StartByte, byte(proto.MetadataLen + len(frame))}
+	stream = append(stream, 1, 2, 3, 4, 5, 6, 7, 8)
+	stream = append(stream, frame...)
+	stream = append(stream, proto.EndByte)
+	port := &scriptedPort{data: stream, err: io.EOF}
+
+	log := &captureLogger{w: &bytes.Buffer{}, verbose: true}
+	err = readLoop(context.Background(), port, proto.NewParser(), new(uint32), 11, nil, udpSink, &captureStats{}, log)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("readLoop = %v, want io.EOF", err)
+	}
+
+	if err := pc.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	buf := make([]byte, 256)
+	n, _, err := pc.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("no ZEP datagram: %v", err)
+	}
+	if n != zep.HeaderLen+len(frame) {
+		t.Fatalf("datagram = %d bytes, want %d", n, zep.HeaderLen+len(frame))
+	}
+	if buf[4] != 11 {
+		t.Errorf("ZEP channel = %d, want 11 (selected channel)", buf[4])
+	}
+	if !bytes.Equal(buf[zep.HeaderLen:n], frame) {
+		t.Errorf("frame = %x, want %x", buf[zep.HeaderLen:n], frame)
 	}
 }

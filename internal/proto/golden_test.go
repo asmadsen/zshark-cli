@@ -59,14 +59,13 @@ func TestGoldenReplaySample(t *testing.T) {
 		}
 		frame := z[zep.HeaderLen : zep.HeaderLen+n]
 
-		// Build the 8-byte metadata prefix the dongle would send. Only byte 4
-		// (channel) is meaningful in v0; the rest is deliberately non-zero so
-		// the test catches a wrong frame offset.
+		// Build the fixed 8-byte header the dongle sends before the raw frame
+		// (01 02 03 04 05 06 07 08). The selected channel is not in the
+		// serial stream; it comes from the CLI.
 		payload := make([]byte, proto.MetadataLen+len(frame))
 		for i := 0; i < proto.MetadataLen; i++ {
-			payload[i] = byte(0xa0 + i)
+			payload[i] = byte(i + 1)
 		}
-		payload[4] = z[4]
 		copy(payload[proto.MetadataLen:], frame)
 
 		stream = append(stream, proto.StartByte, byte(len(payload)))
@@ -106,14 +105,11 @@ func TestGoldenReplaySample(t *testing.T) {
 
 	for i, want := range samples {
 		gotFrame := frames[i]
-		if gotFrame.Channel() != want.channel {
-			t.Errorf("frame %d channel = %d, want %d", i, gotFrame.Channel(), want.channel)
-		}
 		if !bytes.Equal(gotFrame.Data(), want.frame) {
 			t.Errorf("frame %d data mismatch\n got %x\nwant %x", i, gotFrame.Data(), want.frame)
 			continue
 		}
-		got := zep.BuildNTP(gotFrame.Data(), gotFrame.Channel(), want.ntp, want.seq)
+		got := zep.BuildNTP(gotFrame.Data(), want.channel, want.ntp, want.seq)
 		if !bytes.Equal(got, want.zep) {
 			t.Errorf("frame %d ZEP mismatch\n got %x\nwant %x", i, got, want.zep)
 		}
