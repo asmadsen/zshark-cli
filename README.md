@@ -56,7 +56,8 @@ zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
   every network key it sees transported unencrypted in an APS Transport-Key
   command. Each new key is printed once; `--all` also prints repeats. `--json`
   switches to one JSON object per line (NDJSON) on stdout. It does not emit ZEP.
-  Keys protected by APS security cannot be read and are ignored.
+  Keys protected by APS security cannot be read and are ignored. See
+  [docs/KEYS.md](docs/KEYS.md) for the text and JSON fields.
 - Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
   packet/error summary to stderr and exits cleanly.
 
@@ -74,16 +75,26 @@ packets are counted.
 ## Layout
 
 ```
-cmd/zshark/            CLI entry point and flags
+cmd/zshark/            CLI entry point, commands and flags, shared serial runtime
+internal/proto/        dongle command construction and text/binary frame parser
 internal/serialport/   port enumeration and open (cross-platform)
-internal/proto/        dongle text commands and 0x01/len/payload/0x04 framing
-internal/zigbee/       802.15.4/NWK/APS decoding of cleartext network keys
-internal/zep/          ZEP v2 header construction
-internal/zigbee/       802.15.4/NWK decoding and CCM* decryption
-internal/sink/         UDP, pcapng and JSONL sinks
+internal/sink/         ZEP sinks: UDP, pcapng and JSONL
+internal/zep/          ZEP v2 header construction and parsing
+internal/zigbee/       802.15.4 MAC/NWK/APS decoding, CCM* decryption and key discovery
 docs/PROTOCOL.md       reverse-engineered wire protocol
-docs/JSONL.md          JSON Lines output format
+docs/JSONL.md          JSON Lines capture output format
+docs/KEYS.md           keys command output and JSON schema
 ```
+
+## Prerequisites
+
+- Go 1.24 or newer to build.
+- A ConBee II. Either the dedicated sniffer firmware or the stock deCONZ
+  firmware is accepted.
+- Linux: permission to open `/dev/ttyACM*` (usually membership in `dialout`).
+  macOS needs no extra setup.
+- Optional: Wireshark for live ZEP or pcapng capture, and `tshark` for the
+  integration test. No cgo or system services are required.
 
 ## Build and test
 
@@ -128,7 +139,9 @@ used before Wireshark has the key configured.
 
 ## Reference material
 
-The original binary, firmware and a real capture live on the build host:
+The original binary, firmware and a real capture live on the build host. They
+are provenance for the protocol notes and are not runtime inputs: the tool never
+reads them, and tests that use the capture skip when it is absent.
 
 - `/usr/bin/zshark` (unstripped armhf Qt5 binary)
 - `/tmp/opencode/zshark/zep-sample.pcap` (real ConBee II capture)

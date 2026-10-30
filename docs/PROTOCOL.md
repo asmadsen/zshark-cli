@@ -2,7 +2,8 @@
 
 Source: `/usr/bin/zshark` 1.00.06 (ELF32 armhf, unstripped) and a real ConBee II
 capture in `/tmp/opencode/zshark/zep-sample.pcap`. Symbols referenced below are
-from the shipped binary.
+from the shipped binary. These paths are build-host provenance, not runtime
+dependencies; the sample-based tests skip when the capture is absent.
 
 Confidence markers: **observed** = seen in a capture or decoded from code;
 **inferred** = best reading of disassembly; **unconfirmed** = must be validated.
