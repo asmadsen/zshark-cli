@@ -2,6 +2,7 @@ package proto_test
 
 import (
 	"bytes"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -152,6 +153,110 @@ func TestParsePartialBannerFlush(t *testing.T) {
 	lines := p.FlushText()
 	if len(lines) != 1 || lines[0] != "Sniffer V1.0" {
 		t.Fatalf("flushed text = %q", lines)
+	}
+}
+
+func TestParsePartialTextFlushedByFrame(t *testing.T) {
+	p := proto.NewParser()
+	if res := p.Feed([]byte("Sniffer V1.0")); len(res.Text) != 0 {
+		t.Fatalf("unexpected text before newline: %q", res.Text)
+	}
+	res := p.Feed(envelope(payload(11, 0xaa, 0xbb)))
+	if len(res.Text) != 1 || res.Text[0] != "Sniffer V1.0" {
+		t.Fatalf("text = %q, want the partial banner line", res.Text)
+	}
+	if len(res.Frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(res.Frames))
+	}
+	if !bytes.Equal(res.Frames[0].Data(), []byte{0xaa, 0xbb}) {
+		t.Errorf("data = %x", res.Frames[0].Data())
+	}
+}
+
+func TestParseRandomSplitInvariance(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x5a17))
+	for iter := 0; iter < 300; iter++ {
+		stream := randomStream(rng)
+		want := proto.NewParser().Feed(stream).Frames
+
+		p := proto.NewParser()
+		var got []proto.Frame
+		for off := 0; off < len(stream); {
+			end := off + 1 + rng.Intn(11)
+			if end > len(stream) {
+				end = len(stream)
+			}
+			res := p.Feed(stream[off:end])
+			for _, f := range res.Frames {
+				if len(f.Payload) < proto.MetadataLen || len(f.Payload) > proto.DefaultMaxPayload {
+					t.Fatalf("iteration %d: decoded payload length %d", iter, len(f.Payload))
+				}
+				if f.Data() == nil {
+					t.Fatalf("iteration %d: valid payload returned no data", iter)
+				}
+			}
+			got = append(got, res.Frames...)
+			off = end
+		}
+
+		if len(got) != len(want) {
+			t.Fatalf("iteration %d: split feed decoded %d frames, whole feed decoded %d", iter, len(got), len(want))
+		}
+		for i := range want {
+			if !bytes.Equal(got[i].Payload, want[i].Payload) {
+				t.Fatalf("iteration %d frame %d: split payload %x, whole payload %x", iter, i, got[i].Payload, want[i].Payload)
+			}
+		}
+	}
+}
+
+// randomStream mixes text, valid envelopes with binary payloads, and corrupt
+// length or terminator bytes so resynchronisation paths are exercised too.
+func randomStream(rng *rand.Rand) []byte {
+	var stream []byte
+	for i := 0; i < 1+rng.Intn(12); i++ {
+		switch rng.Intn(7) {
+		case 0:
+			stream = append(stream, []byte("Channel 15\r\n")...)
+		case 1:
+			stream = append(stream, []byte("IDLE\n")...)
+		case 2:
+			frame := make([]byte, 1+rng.Intn(24))
+			_, _ = rng.Read(frame)
+			stream = append(stream, envelope(payload(byte(11+rng.Intn(16)), frame...))...)
+		case 3:
+			stream = append(stream, proto.StartByte, byte(rng.Intn(256)))
+		case 4:
+			stream = append(stream, proto.StartByte)
+		case 5:
+			bad := envelope(payload(11, 0xaa, 0xbb))
+			bad[len(bad)-1] = 0x00
+			stream = append(stream, bad...)
+		default:
+			junk := make([]byte, rng.Intn(8))
+			_, _ = rng.Read(junk)
+			stream = append(stream, junk...)
+		}
+	}
+	return stream
+}
+
+func TestCommands(t *testing.T) {
+	tests := []struct {
+		name string
+		got  []byte
+		want string
+	}{
+		{"idle", proto.CmdIdle, "\nidle\n"},
+		{"parms", proto.CmdParms, "\nparms\n"},
+		{"sniff", proto.CmdSniff, "\nsniff\n"},
+		{"channel 11", proto.CmdChannel(11), "\nchan 11\n"},
+		{"channel 26", proto.CmdChannel(26), "\nchan 26\n"},
+	}
+	for _, tt := range tests {
+		if string(tt.got) != tt.want {
+			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
+		}
 	}
 }
 
