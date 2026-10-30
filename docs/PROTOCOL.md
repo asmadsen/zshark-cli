@@ -81,12 +81,21 @@ One UDP datagram per frame, destination port **17754**. **Observed**
 | 3 | 1 | type = 1 (data) | `01` |
 | 4 | 1 | channel | `0b` |
 | 5 | 2 | device code (BE) | `00 00` |
-| 7 | 1 | LQI | `00` |
-| 8 | 4 | timestamp seconds (BE) | varies |
-| 12 | 4 | timestamp microseconds (BE) | varies |
-| 16 | 4 | sequence number (BE) | `00 00 00 ab` |
-| 20 | 10 | reserved, zero | `00 ×10` |
-| 30 | 2 | frame length (BE) | `00 39` |
+| 7 | 1 | LQI/CRC mode (0 = LQI) | `00` |
+| 8 | 1 | LQI | `00` |
+| 9 | 8 | NTP timestamp (BE, seconds since 1900 + 32-bit fraction) | varies |
+| 17 | 4 | sequence number (BE) | `00 00 00 ab` |
+| 21 | 10 | reserved, zero | `00 ×10` |
+| 31 | 1 | frame length, low 7 bits | `39` |
+
+> Correction after validating against the real sample: an earlier revision of
+> this table omitted the LQI/CRC mode byte and described the timestamp as a
+> pair of Unix seconds/microseconds. Wireshark's ZEP dissector uses the layout
+> above: byte 7 is the mode, byte 8 the LQI, bytes 9–16 the 64-bit NTP
+> timestamp, and byte 31 the 7-bit frame length. The sample's first data frame
+> is `45 58 02 01 0b 00 00 00 00 ee 8f 2e 04 67 58 c0 8b 00 00 00 ab ... 39`;
+> its NTP timestamp decodes to 2026-10-30T14:53:56.403697999Z and its sequence
+> to 171, matching Wireshark.
 
 The sample also contains short 8-byte type-2 datagrams (`EX 02 02` + 4-byte
 sequence) at capture start. They are acknowledgements and can be ignored for v0.

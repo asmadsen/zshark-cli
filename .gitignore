@@ -1,4 +1,5 @@
 /zshark
+/zshark-*
 /dist/
 *.pcap
 *.pcapng

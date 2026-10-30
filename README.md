@@ -25,12 +25,28 @@ zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
                [--pcap FILE] [--no-zep] [--verbose]
 ```
 
-- `--port` is auto-detected when omitted.
+- `list` prints candidate ports; `--json` emits the same data as an array.
+  Port discovery prefers a ConBee II (`1cf1:0030`) when the USB IDs are readable.
+- `--port` is auto-detected when omitted and always wins when given.
+- `--channel` defaults to 11 and must be in 11–26.
 - `--dest` defaults to `127.0.0.1:17754`.
 - `--pcap` writes a pcapng file with synthetic Ethernet/IPv4/UDP framing so
-  Wireshark dissects `zep -> zigbee` directly.
+  Wireshark dissects `zep -> zigbee` directly. The file is usable while the
+  capture is still running.
 - `--no-zep` disables UDP output (requires `--pcap`).
-- Ctrl-C sends `idle` to the dongle and exits cleanly.
+- `--verbose` logs serial commands, dongle text and per-frame metadata. Frame
+  payloads are never printed.
+- Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
+  packet/error summary to stderr and exits cleanly.
+
+Exit codes: `0` success, `1` runtime/file/socket error, `2` usage error,
+`3` serial device unavailable, `4` dongle firmware/banner failure.
+
+On startup the tool sends `idle` and `parms`, waits up to two seconds for a
+banner containing `Sniffer`, then sends `chan <n>` and `sniff`. After a serial
+disconnect it re-enumerates an auto-detected port and reconnects with
+exponential backoff; UDP send failures reconnect with backoff while dropped
+packets are counted.
 
 ## Layout
 
@@ -46,10 +62,32 @@ docs/PROTOCOL.md       reverse-engineered wire protocol
 ## Build and test
 
 ```
-go build ./cmd/zshark
+go build -o zshark ./cmd/zshark
 go test ./...
-GOOS=darwin GOARCH=arm64 go build ./cmd/zshark
+go vet ./...
+gofmt -l .
+GOOS=darwin GOARCH=arm64 go build -o zshark-darwin-arm64 ./cmd/zshark
+GOOS=darwin GOARCH=amd64 go build -o zshark-darwin-amd64 ./cmd/zshark
 ```
+
+Tests cover envelope framing and resynchronisation, ZEP header bytes, pcapng
+block structure and IPv4 checksums, flag validation, and a golden replay of
+`/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds every data
+datagram from a synthetic serial stream and compares the result byte-for-byte
+with the real capture; it is skipped when the sample file is absent. Set
+`ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample.
+
+Typical use:
+
+```
+./zshark list
+./zshark capture --channel 15
+./zshark capture --no-zep --pcap zigbee.pcapng
+./zshark capture --dest 192.0.2.10:17754 --verbose
+```
+
+In Wireshark, listen on UDP port 17754 or open the pcapng file directly. The
+capture dissects as `zep -> zigbee`.
 
 ## Reference material
 
