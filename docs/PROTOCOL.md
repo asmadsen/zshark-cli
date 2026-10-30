@@ -109,7 +109,7 @@ The original does not write files; the sample pcap was produced by wrapping the
 ZEP datagrams in synthetic Ethernet/IPv4/UDP headers. Do the same for pcapng:
 
 - pcapng SHB + IDB (link type 1, Ethernet) + one EPB per frame.
-- Ethernet II → IPv4 (proto 17) → UDP (src ephemeral, dst 17754) → ZEP payload.
+- Ethernet II → IPv4 (proto 17) → UDP (src 48311, dst 17754) → ZEP payload.
 - Compute the IPv4 header checksum; leave the UDP checksum 0 (allowed for IPv4).
 - Timestamps from the ZEP header.
 
