@@ -75,7 +75,10 @@ block structure and IPv4 checksums, flag validation, and a golden replay of
 `/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds every data
 datagram from a synthetic serial stream and compares the result byte-for-byte
 with the real capture; it is skipped when the sample file is absent. Set
-`ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample.
+`ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample. An additional
+integration test writes the sample's datagrams through the pcapng sink and
+checks the dissection with `tshark`; it is skipped when `tshark` is not
+installed.
 
 Typical use:
 

@@ -22,14 +22,18 @@ type goldenFrame struct {
 	frame   []byte
 }
 
+func sampleCapturePath() string {
+	if path := os.Getenv("ZSHARK_SAMPLE"); path != "" {
+		return path
+	}
+	return defaultSample
+}
+
 // TestGoldenReplaySample reconstructs the serial envelope for every data frame
 // in the real ConBee II capture, decodes it with the streaming parser, rebuilds
 // the ZEP datagram, and compares it byte-for-byte with the captured datagram.
 func TestGoldenReplaySample(t *testing.T) {
-	path := os.Getenv("ZSHARK_SAMPLE")
-	if path == "" {
-		path = defaultSample
-	}
+	path := sampleCapturePath()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		t.Skipf("sample capture not present: %s", path)
