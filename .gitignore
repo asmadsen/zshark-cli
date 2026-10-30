@@ -1,0 +1,5 @@
+/zshark
+/dist/
+*.pcap
+*.pcapng
+.DS_Store
