@@ -24,6 +24,13 @@ const (
 	DecryptNoSecurity  = "no-security"
 )
 
+// CC24xxMetadataLen is the number of trailing bytes a ChipCon/TI CC24xx radio
+// appends to a frame: RSSI followed by an FCS/LQI byte. ZEP mode 0 datagrams
+// and raw dongle payloads both carry this metadata, which is not part of the
+// 802.15.4 frame. Parse expects it to be removed; ExtractNetworkKey removes it
+// from raw dongle payloads before parsing.
+const CC24xxMetadataLen = 2
+
 // MAC describes the IEEE 802.15.4 MAC header of a captured frame.
 type MAC struct {
 	Type       string `json:"type,omitempty"`
@@ -80,11 +87,23 @@ type Frame struct {
 	keyID        uint8
 	extSrcWire   []byte
 	nwkSrc64Wire []byte
+
+	// Numeric header context. The exported MAC and NWK values are formatted
+	// for display; key extraction needs the raw numbers and presence flags.
+	// These fields are unexported so the JSON encoding is unchanged.
+	macVersion  uint16
+	macDstPAN   uint16
+	macSrcPAN   uint16
+	macDstShort uint16
+	macSrcShort uint16
+	hasDstShort bool
+	hasSrcShort bool
 }
 
 // Parse decodes the MAC header, and for data frames the NWK header and
-// auxiliary security header. The frame must not include the trailing two-byte
-// CC24xx metadata (RSSI/LQI) that ZEP carries.
+// auxiliary security header. The frame must not include the trailing
+// CC24xxMetadataLen bytes of CC24xx metadata (RSSI/LQI) that ZEP and raw dongle
+// payloads carry.
 func Parse(raw []byte) (*Frame, error) {
 	if len(raw) < 3 {
 		return nil, fmt.Errorf("802.15.4 frame too short (%d bytes)", len(raw))
@@ -97,6 +116,7 @@ func Parse(raw []byte) (*Frame, error) {
 
 	off := 2
 	version := (fcf >> 12) & 0x03
+	f.macVersion = version
 	seqSuppressed := version == 2 && fcf&0x0080 != 0
 	if !seqSuppressed {
 		if len(raw) < off+1 {
@@ -115,11 +135,16 @@ func Parse(raw []byte) (*Frame, error) {
 		if len(raw) < off+2 {
 			return nil, fmt.Errorf("truncated destination PAN")
 		}
+		f.macDstPAN = binary.LittleEndian.Uint16(raw[off:])
 		f.MAC.DstPAN = shortAddr(raw[off:])
 		off += 2
 		addr, n, err := parseAddr(raw[off:], dstMode)
 		if err != nil {
 			return nil, err
+		}
+		if dstMode == 2 {
+			f.macDstShort = binary.LittleEndian.Uint16(raw[off:])
+			f.hasDstShort = true
 		}
 		f.MAC.Dst = addr
 		off += n
@@ -132,14 +157,20 @@ func Parse(raw []byte) (*Frame, error) {
 			if len(raw) < off+2 {
 				return nil, fmt.Errorf("truncated source PAN")
 			}
+			f.macSrcPAN = binary.LittleEndian.Uint16(raw[off:])
 			f.MAC.SrcPAN = shortAddr(raw[off:])
 			off += 2
 		} else {
+			f.macSrcPAN = f.macDstPAN
 			f.MAC.SrcPAN = f.MAC.DstPAN
 		}
 		addr, n, err := parseAddr(raw[off:], srcMode)
 		if err != nil {
 			return nil, err
+		}
+		if srcMode == 2 {
+			f.macSrcShort = binary.LittleEndian.Uint16(raw[off:])
+			f.hasSrcShort = true
 		}
 		f.MAC.Src = addr
 		off += n
@@ -157,6 +188,38 @@ func Parse(raw []byte) (*Frame, error) {
 		return f, err
 	}
 	return f, nil
+}
+
+// frameVersion returns the 802.15.4 frame version from the MAC frame control
+// field.
+func (f *Frame) frameVersion() uint16 {
+	return f.macVersion
+}
+
+// panID returns the PAN identifier that applies to the frame: the destination
+// PAN when the frame has one, otherwise the source PAN. It is zero when the
+// frame has neither.
+func (f *Frame) panID() uint16 {
+	if f.MAC.DstPAN != "" {
+		return f.macDstPAN
+	}
+	return f.macSrcPAN
+}
+
+// shortAddresses returns the destination and source MAC short addresses and
+// whether each was present as a 16-bit address.
+func (f *Frame) shortAddresses() (dst, src uint16, hasDst, hasSrc bool) {
+	return f.macDstShort, f.macSrcShort, f.hasDstShort, f.hasSrcShort
+}
+
+// nwkPayload returns the bytes following the decoded NWK header and, when
+// present, the auxiliary security header. It is nil when the frame has no
+// decoded NWK header.
+func (f *Frame) nwkPayload() []byte {
+	if f.NWK == nil || f.payloadStart > len(f.raw) {
+		return nil
+	}
+	return f.raw[f.payloadStart:]
 }
 
 func (f *Frame) parseNWK(off int) error {

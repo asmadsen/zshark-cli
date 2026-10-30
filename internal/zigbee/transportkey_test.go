@@ -147,9 +147,10 @@ func TestExtractRejectsSecuredFrames(t *testing.T) {
 	binary.LittleEndian.PutUint16(macSecured[0:2], macFCF)
 
 	nwkSecured := append([]byte(nil), base...)
-	// NWK header starts after the 9-byte short MAC header.
+	// NWK header starts after the 9-byte short MAC header. Bit 9 is the NWK
+	// security bit in the ZigBee frame control field.
 	nwkOff := 9
-	nwkFCF := binary.LittleEndian.Uint16(nwkSecured[nwkOff:nwkOff+2]) | 1<<6
+	nwkFCF := binary.LittleEndian.Uint16(nwkSecured[nwkOff:nwkOff+2]) | 0x0200
 	binary.LittleEndian.PutUint16(nwkSecured[nwkOff:nwkOff+2], nwkFCF)
 
 	apsSecured := append([]byte(nil), base...)
@@ -220,6 +221,7 @@ func TestExtractIgnoresMissingSource(t *testing.T) {
 	frame := shortMAC(0x1a2b, 0x1234, 0x0000)
 	frame = append(frame, nwkHeader(0x0008, nil)...)
 	frame = append(frame, aps...)
+	frame = append(frame, 0x9e, 0x80) // RSSI, LQI with CRC OK
 
 	got, ok := ExtractNetworkKey(frame)
 	if !ok {
@@ -236,14 +238,15 @@ func TestExtractHandlesExtendedNWKHeaderFields(t *testing.T) {
 	aps := apsTransportKey(byte(KeyTypeStandardNetwork), key, 1, dst, [8]byte{}, false)
 
 	tests := map[string][]byte{
-		"extended addresses": nwkHeader(0x0308, bytes.Repeat([]byte{0xaa}, 16)),
-		"multicast":          nwkHeader(0x0028, []byte{0x01}),
-		"source route":       nwkHeader(0x0088, []byte{0x01, 0x00, 0x34, 0x12}),
+		"extended addresses": nwkHeader(0x1808, bytes.Repeat([]byte{0xaa}, 16)),
+		"multicast":          nwkHeader(0x0108, []byte{0x01}),
+		"source route":       nwkHeader(0x0408, []byte{0x01, 0x00, 0x34, 0x12}),
 	}
 	for name, header := range tests {
 		frame := shortMAC(0x1a2b, 0x1234, 0x0000)
 		frame = append(frame, header...)
 		frame = append(frame, aps...)
+		frame = append(frame, 0x9e, 0x80) // RSSI, LQI with CRC OK
 		if _, ok := ExtractNetworkKey(frame); !ok {
 			t.Errorf("%s: ExtractNetworkKey = false", name)
 		}
@@ -259,6 +262,7 @@ func TestExtractExtendedMACAddresses(t *testing.T) {
 	frame := longMAC(0x1a2b, macDst, macSrc)
 	frame = append(frame, nwkHeader(0x0008, nil)...)
 	frame = append(frame, aps...)
+	frame = append(frame, 0x9e, 0x80) // RSSI, LQI with CRC OK
 
 	got, ok := ExtractNetworkKey(frame)
 	if !ok {

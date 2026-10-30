@@ -89,8 +89,8 @@ func (j *JSONL) Write(packet []byte) error {
 	// ZEP mode 0 carries ChipCon/TI CC24xx metadata (RSSI, FCS/LQI) in the
 	// last two bytes. Mode 1 carries a two-byte CRC. Neither belongs to the
 	// 802.15.4 frame itself.
-	if len(payload) >= 2 {
-		meta := payload[len(payload)-2:]
+	if len(payload) >= zigbee.CC24xxMetadataLen {
+		meta := payload[len(payload)-zigbee.CC24xxMetadataLen:]
 		if packet[7] == 0 {
 			rec.Radio = &jsonlRadio{
 				RSSI:     int(int8(meta[0])),
@@ -98,7 +98,7 @@ func (j *JSONL) Write(packet []byte) error {
 				FCSValid: meta[1]&0x80 != 0,
 			}
 		}
-		payload = payload[:len(payload)-2]
+		payload = payload[:len(payload)-zigbee.CC24xxMetadataLen]
 	}
 	rec.Length = len(payload)
 	rec.Data = hex.EncodeToString(payload)
