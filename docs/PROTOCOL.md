@@ -94,12 +94,15 @@ Offset 8 is confirmed by the frame control field at the start of the raw frame:
 `02 00` (ACK) and `41 88`/`61 88` (data frames with PAN compression and
 extended source addresses) are all sane. **Observed**
 
-Every data frame in the real capture also ends with two metadata bytes: RSSI
-and an LQI byte whose bit 7 marks a valid CRC. Wireshark interprets the last two
-bytes of a ZEP frame as TI CC24xx metadata, which is why its dissection reports
-`FCS OK`/`FCS Bad` even though the dongle never sends the real FCS. Protocol
-decoders must therefore parse forward from the start of the frame and must not
-assume the final byte belongs to the MAC payload. **Observed** (31/31 frames)
+The final two bytes of the raw frame are not 802.15.4 data: the sniffer appends
+ChipCon/TI CC24xx metadata (`RSSI`, then an FCS-valid bit plus LQI). Wireshark
+interprets the last two bytes of a ZEP frame the same way, which is why its
+dissection reports `FCS OK`/`FCS Bad` even though the dongle never sends the
+real FCS. Protocol decoders must therefore parse forward from the start of the
+frame and must not assume the final byte belongs to the MAC payload. The JSONL
+sink exposes the bytes as `radio.rssi`/`radio.lqi`/`radio.fcsValid`.
+**Observed** (real capture 31/31 frames and live pty replay: every frame ended
+with `XX 80`, where `0x80` is FCS-valid and LQI 0).
 
 The earlier reading that `PAYLOAD[4]` is the channel came from the sample ZEP
 header, not from the serial stream; that datagram was built by the GUI from its
@@ -151,6 +154,10 @@ ZEP datagrams in synthetic Ethernet/IPv4/UDP headers. Do the same for pcapng:
 - Timestamps from the ZEP header.
 
 This lets `zshark capture --no-zep --pcap out.pcapng` work with no listener.
+
+An alternative, `--jsonl FILE`, writes one JSON object per 802.15.4 frame with
+no capture plumbing, and can decrypt NWK-secured payloads with `--network-key`.
+See [JSONL.md](JSONL.md).
 
 ## 6. Device discovery
 

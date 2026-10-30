@@ -1,291 +1,142 @@
 package zigbee
 
 import (
-	"bytes"
-	"encoding/binary"
+	"encoding/hex"
 	"testing"
 )
 
-// Builders for the frame shapes the dongle produces. Every frame ends with the
-// two-byte TI CC24xx RSSI/LQI metadata the ZEP dissector expects; the parser
-// must ignore those trailing bytes.
+// testWire is the frame from the CCM test vector. Its auxiliary header says
+// security level 0, which is what ZigBee devices commonly transmit; decryption
+// uses the configured level (5 by default).
+const testWire = "6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225d771bbdc"
 
-type macOptions struct {
-	fcf      uint16
-	dstPAN   uint16
-	dstShort uint16
-	srcShort uint16
-	dstExt   [8]byte
-	srcExt   [8]byte
-}
+// sampleWire is the first secured frame from the real ConBee II capture. Its
+// NWK key is unknown, so only header decoding is asserted.
+const sampleWire = "6188007fa300009f2d091a000050de1e92490323fefff55e156a57d0deb938c1a4281e6dd7056a42acfeff958edc00ea0b75df48f99c57"
 
-func shortMAC(dstPAN, dst, src uint16) []byte {
-	return macFrame(macOptions{
-		fcf:      0x8841, // data, PAN compression, short destination and source
-		dstPAN:   dstPAN,
-		dstShort: dst,
-		srcShort: src,
-	})
-}
-
-func longMAC(dstPAN uint16, dst, src [8]byte) []byte {
-	return macFrame(macOptions{
-		fcf:    0xCC41, // data, PAN compression, extended destination and source
-		dstPAN: dstPAN,
-		dstExt: dst,
-		srcExt: src,
-	})
-}
-
-func macFrame(o macOptions) []byte {
-	b := make([]byte, 0, 32)
-	b = binary.LittleEndian.AppendUint16(b, o.fcf)
-	b = append(b, 0x01) // sequence number
-	if (o.fcf>>10)&0x3 != 0 {
-		b = binary.LittleEndian.AppendUint16(b, o.dstPAN)
-		b = appendAddr(b, (o.fcf>>10)&0x3, o.dstShort, o.dstExt)
+func TestParseAndDecrypt(t *testing.T) {
+	frame, err := Parse(mustHex(t, testWire))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if (o.fcf>>14)&0x3 != 0 {
-		if (o.fcf>>10)&0x3 == 0 || o.fcf&(1<<6) == 0 {
-			b = binary.LittleEndian.AppendUint16(b, o.dstPAN)
-		}
-		b = appendAddr(b, (o.fcf>>14)&0x3, o.srcShort, o.srcExt)
+	if frame.MAC.Type != "data" || frame.MAC.Seq == nil || *frame.MAC.Seq != 1 {
+		t.Errorf("MAC = %+v", frame.MAC)
 	}
-	return b
-}
+	if frame.MAC.DstPAN != "0x1a2b" || frame.MAC.Dst != "0x0000" ||
+		frame.MAC.SrcPAN != "0x1a2b" || frame.MAC.Src != "0x1234" || !frame.MAC.AckRequest {
+		t.Errorf("MAC = %+v", frame.MAC)
+	}
+	if frame.NWK == nil || frame.NWK.Type != "data" ||
+		frame.NWK.Dst != "0x0000" || frame.NWK.Src != "0x1234" {
+		t.Fatalf("NWK = %+v", frame.NWK)
+	}
+	sec := frame.NWK.Security
+	if sec == nil {
+		t.Fatal("NWK security header missing")
+	}
+	if sec.Level != 0 || sec.KeyID != 1 || sec.KeyType != "network" ||
+		sec.FrameCounter != 0x01020304 || sec.KeySeq != 0 {
+		t.Errorf("security = %+v", sec)
+	}
+	if sec.ExtSrc != "dc:8e:95:ff:fe:ac:42:6a" {
+		t.Errorf("extended source = %q", sec.ExtSrc)
+	}
 
-func appendAddr(b []byte, mode uint16, short uint16, ext [8]byte) []byte {
-	switch mode {
-	case 2:
-		return binary.LittleEndian.AppendUint16(b, short)
-	case 3:
-		return append(b, ext[:]...)
-	default:
-		return b
+	dec := frame.Decrypt([][16]byte{testKey}, SecEncMIC32)
+	if dec == nil || dec.Status != DecryptOK {
+		t.Fatalf("decryption = %+v", dec)
+	}
+	if dec.KeyIndex == nil || *dec.KeyIndex != 0 || dec.Level != SecEncMIC32 {
+		t.Errorf("decryption = %+v", dec)
+	}
+	if dec.Payload != hex.EncodeToString(testPlain) {
+		t.Errorf("payload = %q, want %x", dec.Payload, testPlain)
+	}
+	if sec.MIC != "d771bbdc" {
+		t.Errorf("MIC = %q, want d771bbdc", sec.MIC)
 	}
 }
 
-func nwkHeader(fcf uint16, tail []byte) []byte {
-	b := make([]byte, 0, 16+len(tail))
-	b = binary.LittleEndian.AppendUint16(b, fcf)
-	b = binary.LittleEndian.AppendUint16(b, 0x1234) // destination
-	b = binary.LittleEndian.AppendUint16(b, 0x0000) // source
-	b = append(b, 7, 1)                             // radius, sequence
-	return append(b, tail...)
-}
-
-func apsTransportKey(keyType byte, key [16]byte, seq byte, dest, src [8]byte, secured bool) []byte {
-	fcf := byte(0x01) // command
-	if secured {
-		fcf |= 1 << 5
+func TestDecryptWithoutKeys(t *testing.T) {
+	frame, err := Parse(mustHex(t, testWire))
+	if err != nil {
+		t.Fatal(err)
 	}
-	b := []byte{fcf, 0x01, 0x05, keyType}
-	b = append(b, key[:]...)
-	b = append(b, seq)
-	b = append(b, dest[:]...)
-	b = append(b, src[:]...)
-	return b
-}
-
-func networkKeyFrame(keyType byte) []byte {
-	key := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
-	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
-	src := [8]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11}
-	frame := shortMAC(0x1a2b, 0x1234, 0x0000)
-	frame = append(frame, nwkHeader(0x0008, nil)...)
-	frame = append(frame, apsTransportKey(keyType, key, 3, dst, src, false)...)
-	frame = append(frame, 0x9e, 0x80) // RSSI, LQI with CRC OK
-	return frame
-}
-
-func TestExtractStandardNetworkKey(t *testing.T) {
-	key, ok := ExtractNetworkKey(networkKeyFrame(byte(KeyTypeStandardNetwork)))
-	if !ok {
-		t.Fatal("ExtractNetworkKey = false, want true")
+	dec := frame.Decrypt(nil, SecEncMIC32)
+	if dec == nil || dec.Status != DecryptNoKey {
+		t.Fatalf("decryption = %+v", dec)
 	}
-	if key.KeyType != KeyTypeStandardNetwork {
-		t.Errorf("key type = %v, want standard-network", key.KeyType)
+	if dec.Payload != "" {
+		t.Errorf("payload = %q, want empty", dec.Payload)
 	}
-	if got, want := string(key.Key[:]), "ZigBeeAlliance09"; got != want {
-		t.Errorf("key = %q, want %q", got, want)
-	}
-	if key.Sequence != 3 {
-		t.Errorf("sequence = %d, want 3", key.Sequence)
-	}
-	if key.PAN != 0x1a2b || !key.HasDestShort || key.DestinationShort != 0x1234 {
-		t.Errorf("destination context = %+v", key)
-	}
-	if !key.HasSrcShort || key.SourceShort != 0x0000 {
-		t.Errorf("source context = %+v", key)
-	}
-	if got, want := formatHex(key.Destination), "00124b001a2b3c4d"; got != want {
-		t.Errorf("destination = %s, want %s", got, want)
-	}
-	if !key.HasSource {
-		t.Fatal("source address not reported")
-	}
-	if got, want := formatHex(key.Source), "aabbccddeeff0011"; got != want {
-		t.Errorf("source = %s, want %s", got, want)
+	if frame.NWK.Security.MIC != "d771bbdc" {
+		t.Errorf("MIC = %q", frame.NWK.Security.MIC)
 	}
 }
 
-func TestExtractHighSecurityNetworkKey(t *testing.T) {
-	key, ok := ExtractNetworkKey(networkKeyFrame(byte(KeyTypeHighSecurityNetwork)))
-	if !ok {
-		t.Fatal("ExtractNetworkKey = false, want true")
+func TestDecryptWrongKey(t *testing.T) {
+	frame, err := Parse(mustHex(t, testWire))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if key.KeyType != KeyTypeHighSecurityNetwork {
-		t.Errorf("key type = %v, want high-security-network", key.KeyType)
+	key := testKey
+	key[15] ^= 0xff
+	dec := frame.Decrypt([][16]byte{key}, SecEncMIC32)
+	if dec == nil || dec.Status != DecryptFailed {
+		t.Fatalf("decryption = %+v", dec)
 	}
 }
 
-func TestExtractRejectsSecuredFrames(t *testing.T) {
-	base := networkKeyFrame(byte(KeyTypeStandardNetwork))
+func TestParseRealSampleFrame(t *testing.T) {
+	frame, err := Parse(mustHex(t, sampleWire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.MAC.DstPAN != "0xa37f" || frame.MAC.Dst != "0x0000" ||
+		frame.MAC.SrcPAN != "0xa37f" || frame.MAC.Src != "0x2d9f" {
+		t.Errorf("MAC = %+v", frame.MAC)
+	}
+	if frame.NWK == nil || frame.NWK.Type != "command" {
+		t.Fatalf("NWK = %+v", frame.NWK)
+	}
+	if frame.NWK.ExtDst != "15:5e:f5:ff:fe:23:03:49" {
+		t.Errorf("extended destination = %q", frame.NWK.ExtDst)
+	}
+	if frame.NWK.ExtSrc != "a4:c1:38:b9:de:d0:57:6a" {
+		t.Errorf("extended source = %q", frame.NWK.ExtSrc)
+	}
+	sec := frame.NWK.Security
+	if sec == nil {
+		t.Fatal("security header missing")
+	}
+	if sec.Level != 0 || sec.KeyID != 1 || sec.FrameCounter != 98004254 ||
+		sec.ExtSrc != "6a:42:ac:fe:ff:95:8e:dc" || sec.KeySeq != 0 {
+		t.Errorf("security = %+v", sec)
+	}
+	dec := frame.Decrypt([][16]byte{testKey}, SecEncMIC32)
+	if dec == nil || dec.Status != DecryptFailed {
+		t.Fatalf("decryption = %+v", dec)
+	}
+	if sec.MIC != "48f99c57" {
+		t.Errorf("MIC = %q, want 48f99c57", sec.MIC)
+	}
+}
 
-	macSecured := append([]byte(nil), base...)
-	macFCF := binary.LittleEndian.Uint16(macSecured[0:2]) | 1<<3
-	binary.LittleEndian.PutUint16(macSecured[0:2], macFCF)
+func TestParseAck(t *testing.T) {
+	// ACK frames carry no NWK header.
+	frame, err := Parse([]byte{0x02, 0x00, 0x2c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.MAC.Type != "ack" || frame.NWK != nil {
+		t.Errorf("frame = %+v", frame)
+	}
+}
 
-	nwkSecured := append([]byte(nil), base...)
-	// NWK header starts after the 9-byte short MAC header.
-	nwkOff := 9
-	nwkFCF := binary.LittleEndian.Uint16(nwkSecured[nwkOff:nwkOff+2]) | 1<<6
-	binary.LittleEndian.PutUint16(nwkSecured[nwkOff:nwkOff+2], nwkFCF)
-
-	apsSecured := append([]byte(nil), base...)
-	apsOff := nwkOff + 8
-	apsSecured[apsOff] |= 1 << 5
-
-	for name, frame := range map[string][]byte{
-		"mac": macSecured,
-		"nwk": nwkSecured,
-		"aps": apsSecured,
-	} {
-		if _, ok := ExtractNetworkKey(frame); ok {
-			t.Errorf("%s secured frame accepted", name)
+func TestParseTruncated(t *testing.T) {
+	for _, raw := range [][]byte{nil, {0x01}, {0x61, 0x88, 0x01, 0x2b}} {
+		if _, err := Parse(raw); err == nil {
+			t.Errorf("Parse(%x) succeeded", raw)
 		}
 	}
-}
-
-func TestExtractRejectsOtherKeyTypes(t *testing.T) {
-	for _, keyType := range []KeyType{
-		KeyTypeTrustCenterMaster,
-		KeyTypeApplicationMaster,
-		KeyTypeApplicationLink,
-		KeyTypeTrustCenterLink,
-		KeyTypeBasicAuthorization,
-		KeyTypeAdminAuthorization,
-	} {
-		if _, ok := ExtractNetworkKey(networkKeyFrame(byte(keyType))); ok {
-			t.Errorf("key type %v accepted as a network key", keyType)
-		}
-	}
-}
-
-func TestExtractRejectsOtherFrames(t *testing.T) {
-	key := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
-	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
-
-	// APS data frame rather than a command.
-	dataAPS := apsTransportKey(byte(KeyTypeStandardNetwork), key, 0, dst, [8]byte{}, false)
-	dataAPS[0] = 0x00
-
-	// A different APS command.
-	otherCommand := append([]byte(nil), dataAPS...)
-	otherCommand[0] = 0x01
-	otherCommand[2] = 0x06
-
-	// A beacon frame rather than MAC data.
-	beacon := networkKeyFrame(byte(KeyTypeStandardNetwork))
-	beacon[0] = 0x00
-
-	for name, frame := range map[string][]byte{
-		"aps data":      dataAPS,
-		"other command": otherCommand,
-		"beacon":        beacon,
-		"empty":         nil,
-		"short":         {0x41, 0x88},
-	} {
-		if _, ok := ExtractNetworkKey(frame); ok {
-			t.Errorf("%s accepted", name)
-		}
-	}
-}
-
-func TestExtractIgnoresMissingSource(t *testing.T) {
-	key := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
-	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
-	aps := apsTransportKey(byte(KeyTypeStandardNetwork), key, 0, dst, [8]byte{}, false)
-	aps = aps[:len(aps)-8] // omit the source address
-	frame := shortMAC(0x1a2b, 0x1234, 0x0000)
-	frame = append(frame, nwkHeader(0x0008, nil)...)
-	frame = append(frame, aps...)
-
-	got, ok := ExtractNetworkKey(frame)
-	if !ok {
-		t.Fatal("ExtractNetworkKey = false, want true")
-	}
-	if got.HasSource {
-		t.Error("HasSource = true with no source address in the frame")
-	}
-}
-
-func TestExtractHandlesExtendedNWKHeaderFields(t *testing.T) {
-	key := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
-	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
-	aps := apsTransportKey(byte(KeyTypeStandardNetwork), key, 1, dst, [8]byte{}, false)
-
-	tests := map[string][]byte{
-		"extended addresses": nwkHeader(0x0308, bytes.Repeat([]byte{0xaa}, 16)),
-		"multicast":          nwkHeader(0x0028, []byte{0x01}),
-		"source route":       nwkHeader(0x0088, []byte{0x01, 0x00, 0x34, 0x12}),
-	}
-	for name, header := range tests {
-		frame := shortMAC(0x1a2b, 0x1234, 0x0000)
-		frame = append(frame, header...)
-		frame = append(frame, aps...)
-		if _, ok := ExtractNetworkKey(frame); !ok {
-			t.Errorf("%s: ExtractNetworkKey = false", name)
-		}
-	}
-}
-
-func TestExtractExtendedMACAddresses(t *testing.T) {
-	key := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
-	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
-	aps := apsTransportKey(byte(KeyTypeStandardNetwork), key, 0, dst, [8]byte{}, false)
-	macDst := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
-	macSrc := [8]byte{9, 10, 11, 12, 13, 14, 15, 16}
-	frame := longMAC(0x1a2b, macDst, macSrc)
-	frame = append(frame, nwkHeader(0x0008, nil)...)
-	frame = append(frame, aps...)
-
-	got, ok := ExtractNetworkKey(frame)
-	if !ok {
-		t.Fatal("ExtractNetworkKey = false, want true")
-	}
-	if got.PAN != 0x1a2b {
-		t.Errorf("PAN = %#04x, want 0x1a2b", got.PAN)
-	}
-	if got.HasDestShort || got.HasSrcShort {
-		t.Errorf("short addresses reported for extended MAC addresses: %+v", got)
-	}
-}
-
-func FuzzExtractNetworkKey(f *testing.F) {
-	f.Add(networkKeyFrame(byte(KeyTypeStandardNetwork)))
-	f.Add(networkKeyFrame(byte(KeyTypeStandardNetwork))[:20])
-	f.Add([]byte{0x41, 0x88, 0x01})
-	f.Fuzz(func(t *testing.T, frame []byte) {
-		_, _ = ExtractNetworkKey(frame)
-	})
-}
-
-func formatHex(addr [8]byte) string {
-	const hexdigits = "0123456789abcdef"
-	out := make([]byte, 0, 16)
-	for _, b := range addr {
-		out = append(out, hexdigits[b>>4], hexdigits[b&0x0f])
-	}
-	return string(out)
 }

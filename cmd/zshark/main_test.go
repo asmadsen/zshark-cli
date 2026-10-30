@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -187,5 +188,39 @@ func TestReadLoopUsesSelectedChannel(t *testing.T) {
 	}
 	if !bytes.Equal(buf[zep.HeaderLen:n], frame) {
 		t.Errorf("frame = %x, want %x", buf[zep.HeaderLen:n], frame)
+	}
+}
+
+func TestReadLoopWritesJSONL(t *testing.T) {
+	frame, err := hex.DecodeString("6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225d771bbdc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The dongle appends RSSI and FCS/LQI metadata to each frame.
+	payload := append(append([]byte(nil), frame...), 0x9e, 0x80)
+	stream := []byte{proto.StartByte, byte(proto.MetadataLen + len(payload))}
+	stream = append(stream, 1, 2, 3, 4, 5, 6, 7, 8)
+	stream = append(stream, payload...)
+	stream = append(stream, proto.EndByte)
+	port := &scriptedPort{data: stream, err: io.EOF}
+
+	var out bytes.Buffer
+	key := [16]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	jsonSink := sink.NewJSONL(&out, [][16]byte{key}, 5)
+	log := &captureLogger{w: &bytes.Buffer{}, verbose: true}
+	outp := &captureOutput{channel: 11, jsonl: jsonSink, stats: &captureStats{}, log: log}
+	if err := readLoop(context.Background(), port, proto.NewParser(), &captureStats{}, log, outp.frame); !errors.Is(err, io.EOF) {
+		t.Fatalf("readLoop = %v, want io.EOF", err)
+	}
+	line := strings.TrimSpace(out.String())
+	if line == "" {
+		t.Fatal("no JSONL output")
+	}
+	if !strings.Contains(line, `"channel":11`) || !strings.Contains(line, `"status":"ok"`) ||
+		!strings.Contains(line, `"payload":"00112233445566778899"`) {
+		t.Errorf("unexpected JSONL: %s", line)
+	}
+	if strings.Contains(line, "9e80") {
+		t.Errorf("JSONL still contains CC24xx metadata: %s", line)
 	}
 }

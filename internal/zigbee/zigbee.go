@@ -1,305 +1,442 @@
-// Package zigbee decodes the small part of IEEE 802.15.4, ZigBee NWK and APS
-// needed to recognise Transport-Key commands that carry a network key in
-// clear.
+// Package zigbee decodes IEEE 802.15.4 MAC, ZigBee NWK and APS headers.
 //
-// Only frames that are not secured at the MAC, NWK or APS layer can be read.
-// A network key that is protected by the well-known Trust Center Link Key is
-// therefore intentionally not reported.
+// It provides frame decoding and NWK payload decryption with network keys for
+// the JSONL sink, and recognises cleartext APS Transport-Key commands that
+// carry a network key so the keys command can report it.
+//
+// Only frames that are not secured at the MAC, NWK or APS layer can be read
+// for key discovery. A network key protected by the well-known Trust Center
+// Link Key is therefore intentionally not reported.
 package zigbee
 
-import "encoding/binary"
-
-// KeyType identifies the key descriptor carried by an APS Transport-Key
-// command. Values match the ZigBee specification and Wireshark's
-// zbee_aps.cmd.key_type field.
-type KeyType byte
-
-const (
-	KeyTypeTrustCenterMaster   KeyType = 0x00
-	KeyTypeStandardNetwork     KeyType = 0x01
-	KeyTypeApplicationMaster   KeyType = 0x02
-	KeyTypeApplicationLink     KeyType = 0x03
-	KeyTypeTrustCenterLink     KeyType = 0x04
-	KeyTypeHighSecurityNetwork KeyType = 0x05
-	KeyTypeBasicAuthorization  KeyType = 0xB2
-	KeyTypeAdminAuthorization  KeyType = 0xB3
+import (
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 )
 
-// String returns a human-readable key type name.
-func (t KeyType) String() string {
-	switch t {
-	case KeyTypeTrustCenterMaster:
-		return "trust-center-master"
-	case KeyTypeStandardNetwork:
-		return "standard-network"
-	case KeyTypeApplicationMaster:
-		return "application-master"
-	case KeyTypeApplicationLink:
-		return "application-link"
-	case KeyTypeTrustCenterLink:
-		return "trust-center-link"
-	case KeyTypeHighSecurityNetwork:
-		return "high-security-network"
-	case KeyTypeBasicAuthorization:
-		return "basic-authorization"
-	case KeyTypeAdminAuthorization:
-		return "admin-authorization"
-	default:
-		return "unknown"
-	}
-}
-
-// IsNetworkKey reports whether the key type is a network key.
-func (t KeyType) IsNetworkKey() bool {
-	return t == KeyTypeStandardNetwork || t == KeyTypeHighSecurityNetwork
-}
-
-// NetworkKey is an APS Transport-Key command that carries a network key
-// without APS security.
-type NetworkKey struct {
-	KeyType  KeyType
-	Key      [16]byte
-	Sequence uint8
-
-	// Destination and Source are extended (64-bit) addresses in wire order,
-	// least significant byte first. Source is zero unless HasSource is set.
-	Destination [8]byte
-	Source      [8]byte
-	HasSource   bool
-
-	// PAN and the short addresses come from the MAC and NWK headers. The
-	// short address flags are false when the corresponding address was an
-	// extended address or absent.
-	PAN              uint16
-	DestinationShort uint16
-	SourceShort      uint16
-	HasDestShort     bool
-	HasSrcShort      bool
-}
-
+// Decryption status values used in JSON output.
 const (
-	apsFrameTypeCommand    = 0x01
-	apsCommandTransportKey = 0x05
-	keyLength              = 16
+	DecryptOK          = "ok"
+	DecryptNoKey       = "no-key"
+	DecryptFailed      = "failed"
+	DecryptUnsupported = "unsupported-key"
+	DecryptNoSecurity  = "no-security"
 )
 
-// ExtractNetworkKey returns the network key carried by frame when frame is a
-// cleartext 802.15.4 data frame with an APS Transport-Key command for a
-// standard or high-security network key. It returns false for every other
-// frame, including secured frames and unrelated key descriptors.
-func ExtractNetworkKey(frame []byte) (NetworkKey, bool) {
-	mac, ok := parseMAC(frame)
-	if !ok {
-		return NetworkKey{}, false
-	}
-	payload, ok := parseNWK(mac.payload)
-	if !ok {
-		return NetworkKey{}, false
-	}
-	key, ok := parseAPS(payload)
-	if !ok {
-		return NetworkKey{}, false
-	}
-	key.PAN = mac.pan
-	key.DestinationShort = mac.dstShort
-	key.SourceShort = mac.srcShort
-	key.HasDestShort = mac.hasDstShort
-	key.HasSrcShort = mac.hasSrcShort
-	return key, true
+// MAC describes the IEEE 802.15.4 MAC header of a captured frame.
+type MAC struct {
+	Type       string `json:"type,omitempty"`
+	Seq        *uint8 `json:"seq,omitempty"`
+	DstPAN     string `json:"dstPan,omitempty"`
+	Dst        string `json:"dst,omitempty"`
+	SrcPAN     string `json:"srcPan,omitempty"`
+	Src        string `json:"src,omitempty"`
+	AckRequest bool   `json:"ackRequest,omitempty"`
+	Security   bool   `json:"security,omitempty"`
 }
 
-type macInfo struct {
-	pan         uint16
-	dstShort    uint16
-	srcShort    uint16
-	hasDstShort bool
-	hasSrcShort bool
-	payload     []byte
+// NWK describes the ZigBee network layer header. It is only present for
+// 802.15.4 data frames that carry a NWK frame.
+type NWK struct {
+	Type     string    `json:"type,omitempty"`
+	Dst      string    `json:"dst,omitempty"`
+	Src      string    `json:"src,omitempty"`
+	ExtDst   string    `json:"extDst,omitempty"`
+	ExtSrc   string    `json:"extSrc,omitempty"`
+	Security *Security `json:"security,omitempty"`
 }
 
-// parseMAC strips the IEEE 802.15.4 MAC header and returns addressing
-// context plus the MAC payload. Secured frames and frames with reserved
-// addressing modes are rejected.
-func parseMAC(frame []byte) (macInfo, bool) {
-	if len(frame) < 3 {
-		return macInfo{}, false
+// Security describes the ZigBee auxiliary security header.
+type Security struct {
+	Level        uint8  `json:"level"`
+	KeyID        uint8  `json:"keyId"`
+	KeyType      string `json:"keyType,omitempty"`
+	FrameCounter uint32 `json:"frameCounter"`
+	ExtSrc       string `json:"extSrc,omitempty"`
+	KeySeq       uint8  `json:"keySeq"`
+	MIC          string `json:"mic,omitempty"`
+}
+
+// Decryption is the result of applying network keys to a secured NWK frame.
+type Decryption struct {
+	Status   string `json:"status"`
+	Level    uint8  `json:"level"`
+	KeyIndex *int   `json:"keyIndex,omitempty"`
+	Payload  string `json:"payload,omitempty"`
+}
+
+// Frame is a parsed IEEE 802.15.4 frame. MAC is always populated when Parse
+// succeeds; NWK is populated for data frames with a readable NWK header.
+type Frame struct {
+	MAC MAC
+	NWK *NWK
+
+	raw          []byte
+	auxStart     int
+	payloadStart int
+	control      byte
+	frameCounter uint32
+	keyID        uint8
+	extSrcWire   []byte
+	nwkSrc64Wire []byte
+}
+
+// Parse decodes the MAC header, and for data frames the NWK header and
+// auxiliary security header. The frame must not include the trailing two-byte
+// CC24xx metadata (RSSI/LQI) that ZEP carries.
+func Parse(raw []byte) (*Frame, error) {
+	if len(raw) < 3 {
+		return nil, fmt.Errorf("802.15.4 frame too short (%d bytes)", len(raw))
 	}
-	fcf := binary.LittleEndian.Uint16(frame[0:2])
-	if fcf&0x0007 != 0x0001 { // only data frames carry NWK
-		return macInfo{}, false
-	}
-	if fcf&(1<<3) != 0 { // MAC security: payload is encrypted
-		return macInfo{}, false
+	f := &Frame{raw: raw}
+	fcf := binary.LittleEndian.Uint16(raw[0:2])
+	f.MAC.Type = macTypeName(fcf & 0x07)
+	f.MAC.AckRequest = fcf&0x20 != 0
+	f.MAC.Security = fcf&0x08 != 0
+
+	off := 2
+	version := (fcf >> 12) & 0x03
+	seqSuppressed := version == 2 && fcf&0x0080 != 0
+	if !seqSuppressed {
+		if len(raw) < off+1 {
+			return nil, fmt.Errorf("truncated MAC sequence number")
+		}
+		seq := raw[off]
+		f.MAC.Seq = &seq
+		off++
 	}
 
-	version := (fcf >> 12) & 0x0003
-	if version > 1 {
-		// ZigBee uses the 2003 and 2006 MAC header layouts. Version 2
-		// (2015) adds sequence suppression and header IEs that are not
-		// needed here.
-		return macInfo{}, false
-	}
-	dstMode := (fcf >> 10) & 0x0003
-	srcMode := (fcf >> 14) & 0x0003
-	if dstMode == 1 || srcMode == 1 { // reserved addressing modes
-		return macInfo{}, false
-	}
-	panCompression := fcf&(1<<6) != 0
+	dstMode := (fcf >> 10) & 0x03
+	srcMode := (fcf >> 14) & 0x03
+	panCompression := fcf&0x40 != 0
 
-	var info macInfo
-	off := 2 + 1 // frame control + sequence number
 	if dstMode != 0 {
-		if off+2 > len(frame) {
-			return macInfo{}, false
+		if len(raw) < off+2 {
+			return nil, fmt.Errorf("truncated destination PAN")
 		}
-		info.pan = binary.LittleEndian.Uint16(frame[off : off+2])
+		f.MAC.DstPAN = shortAddr(raw[off:])
 		off += 2
-		var ok bool
-		off, info.dstShort, info.hasDstShort, ok = readAddress(frame, off, dstMode)
-		if !ok {
-			return macInfo{}, false
+		addr, n, err := parseAddr(raw[off:], dstMode)
+		if err != nil {
+			return nil, err
 		}
+		f.MAC.Dst = addr
+		off += n
 	}
 	if srcMode != 0 {
-		// The source PAN is omitted when PAN ID compression is set and a
-		// destination PAN is present.
-		if dstMode == 0 || !panCompression {
-			if off+2 > len(frame) {
-				return macInfo{}, false
+		if srcMode == 0x01 || dstMode == 0x01 {
+			return nil, fmt.Errorf("reserved MAC addressing mode")
+		}
+		if !panCompression || dstMode == 0 {
+			if len(raw) < off+2 {
+				return nil, fmt.Errorf("truncated source PAN")
 			}
-			if dstMode == 0 {
-				info.pan = binary.LittleEndian.Uint16(frame[off : off+2])
-			}
+			f.MAC.SrcPAN = shortAddr(raw[off:])
 			off += 2
+		} else {
+			f.MAC.SrcPAN = f.MAC.DstPAN
 		}
-		var ok bool
-		off, info.srcShort, info.hasSrcShort, ok = readAddress(frame, off, srcMode)
-		if !ok {
-			return macInfo{}, false
+		addr, n, err := parseAddr(raw[off:], srcMode)
+		if err != nil {
+			return nil, err
 		}
+		f.MAC.Src = addr
+		off += n
 	}
-	if off > len(frame) {
-		return macInfo{}, false
+
+	// ZigBee uses NWK-layer security. If the MAC layer also carries a
+	// security header we cannot locate the NWK header reliably, so stop here.
+	if f.MAC.Security {
+		return f, nil
 	}
-	info.payload = frame[off:]
-	return info, true
+	if fcf&0x07 != 1 { // not a data frame
+		return f, nil
+	}
+	if err := f.parseNWK(off); err != nil {
+		return f, err
+	}
+	return f, nil
 }
 
-// readAddress consumes one address and returns its short value when it is a
-// 16-bit address.
-func readAddress(frame []byte, off int, mode uint16) (next int, short uint16, hasShort bool, ok bool) {
-	switch mode {
-	case 2:
-		if off+2 > len(frame) {
-			return off, 0, false, false
+func (f *Frame) parseNWK(off int) error {
+	raw := f.raw
+	if len(raw) < off+2 {
+		return fmt.Errorf("truncated NWK frame control")
+	}
+	fcf := binary.LittleEndian.Uint16(raw[off : off+2])
+	off += 2
+
+	nwk := &NWK{Type: nwkTypeName(fcf & 0x03)}
+	version := (fcf >> 2) & 0x0f
+	security := fcf&0x0200 != 0
+	multicast := fcf&0x0100 != 0
+	route := fcf&0x0400 != 0
+	extDst := fcf&0x0800 != 0
+	extSrc := fcf&0x1000 != 0
+
+	// Interpan frames have no addressing fields.
+	if fcf&0x03 != 3 {
+		if len(raw) < off+6 {
+			return fmt.Errorf("truncated NWK header")
 		}
-		return off + 2, binary.LittleEndian.Uint16(frame[off : off+2]), true, true
-	case 3:
-		if off+8 > len(frame) {
-			return off, 0, false, false
-		}
-		return off + 8, 0, false, true
-	default:
-		return off, 0, false, true
-	}
-}
+		nwk.Dst = shortAddr(raw[off:])
+		nwk.Src = shortAddr(raw[off+2:])
+		off += 6 // destination, source, radius, sequence number
 
-// parseNWK strips the ZigBee NWK header and returns the APS payload.
-func parseNWK(payload []byte) ([]byte, bool) {
-	if len(payload) < 8 {
-		return nil, false
-	}
-	fcf := binary.LittleEndian.Uint16(payload[0:2])
-	if fcf&0x0003 != 0x0000 { // only NWK data frames carry APS
-		return nil, false
-	}
-	if fcf&(1<<6) != 0 { // NWK security: payload is encrypted
-		return nil, false
-	}
-
-	version := (fcf >> 2) & 0x0003
-	multicast := fcf&(1<<5) != 0
-	sourceRoute := fcf&(1<<7) != 0
-	extDst := fcf&(1<<8) != 0
-	extSrc := fcf&(1<<9) != 0
-
-	off := 8 // FCF + destination + source + radius + sequence
-	if version >= 2 {
-		if extDst {
+		if version >= 2 && extDst {
+			if len(raw) < off+8 {
+				return fmt.Errorf("truncated NWK extended destination")
+			}
+			nwk.ExtDst = extAddr(raw[off:], true)
 			off += 8
 		}
-		if extSrc {
+		if version >= 2 && extSrc {
+			if len(raw) < off+8 {
+				return fmt.Errorf("truncated NWK extended source")
+			}
+			f.nwkSrc64Wire = raw[off : off+8]
+			nwk.ExtSrc = extAddr(raw[off:], true)
 			off += 8
 		}
-		if multicast {
+		if version >= 2 && multicast {
+			if len(raw) < off+1 {
+				return fmt.Errorf("truncated NWK multicast control")
+			}
 			off++
 		}
-	}
-	if version >= 2 && sourceRoute {
-		if off >= len(payload) {
-			return nil, false
+		if version >= 2 && route {
+			if len(raw) < off+2 {
+				return fmt.Errorf("truncated NWK source route")
+			}
+			relayCount := int(raw[off])
+			if len(raw) < off+2+2*relayCount {
+				return fmt.Errorf("truncated NWK relay list")
+			}
+			off += 2 + 2*relayCount
 		}
-		// Relay count, relay index, then two bytes per relay.
-		off += 2 + 2*int(payload[off])
 	}
-	if off > len(payload) {
-		return nil, false
+
+	if security {
+		sec, next, err := parseSecurity(raw, off)
+		if err != nil {
+			return err
+		}
+		f.auxStart = off
+		f.payloadStart = next
+		f.control = sec.control
+		f.frameCounter = sec.frameCounter
+		f.keyID = sec.keyID
+		f.extSrcWire = sec.extSrc
+		nwk.Security = sec.info
+	} else {
+		f.payloadStart = off
 	}
-	return payload[off:], true
+
+	f.NWK = nwk
+	return nil
 }
 
-// parseAPS returns the network key from an unsecured APS Transport-Key
-// command.
-func parseAPS(payload []byte) (NetworkKey, bool) {
-	if len(payload) < 3 {
-		return NetworkKey{}, false
-	}
-	fcf := payload[0]
-	if fcf&0x03 != apsFrameTypeCommand {
-		return NetworkKey{}, false
-	}
-	if fcf&(1<<5) != 0 { // APS security: command is encrypted
-		return NetworkKey{}, false
-	}
-	if fcf&(1<<7) != 0 { // extended header; not used by commands
-		return NetworkKey{}, false
-	}
+type securityHeader struct {
+	info         *Security
+	control      byte
+	frameCounter uint32
+	keyID        uint8
+	extSrc       []byte
+}
 
-	off := 2 // frame control + APS counter
-	if payload[off] != apsCommandTransportKey {
-		return NetworkKey{}, false
+func parseSecurity(raw []byte, off int) (*securityHeader, int, error) {
+	if len(raw) < off+1 {
+		return nil, 0, fmt.Errorf("truncated auxiliary security header")
 	}
+	control := raw[off]
 	off++
+	keyID := (control >> 3) & 0x03
+	info := &Security{
+		Level:   control & 0x07,
+		KeyID:   keyID,
+		KeyType: KeyTypeName(keyID),
+	}
+	if len(raw) < off+4 {
+		return nil, 0, fmt.Errorf("truncated security frame counter")
+	}
+	info.FrameCounter = binary.LittleEndian.Uint32(raw[off:])
+	off += 4
 
-	if off >= len(payload) {
-		return NetworkKey{}, false
+	var extSrc []byte
+	if control&0x20 != 0 {
+		if len(raw) < off+8 {
+			return nil, 0, fmt.Errorf("truncated security extended source")
+		}
+		extSrc = raw[off : off+8]
+		info.ExtSrc = extAddr(extSrc, false)
+		off += 8
 	}
-	keyType := KeyType(payload[off])
-	off++
-	if !keyType.IsNetworkKey() {
-		return NetworkKey{}, false
+	if keyID == 1 { // network keys carry a key sequence number
+		if len(raw) < off+1 {
+			return nil, 0, fmt.Errorf("truncated security key sequence number")
+		}
+		info.KeySeq = raw[off]
+		off++
 	}
-	if off+keyLength > len(payload) {
-		return NetworkKey{}, false
+	return &securityHeader{
+		info:         info,
+		control:      control,
+		frameCounter: info.FrameCounter,
+		keyID:        keyID,
+		extSrc:       extSrc,
+	}, off, nil
+}
+
+// Decrypt applies network keys to a secured NWK frame. level is the ZigBee
+// security level to use for decryption; ZigBee devices commonly transmit level
+// 0 in the auxiliary header, so the level is configured out of band like
+// Wireshark does. The frame's Security.MIC is updated to match level.
+func (f *Frame) Decrypt(keys [][16]byte, level uint8) *Decryption {
+	if f.NWK == nil || f.NWK.Security == nil {
+		return nil
+	}
+	sec := f.NWK.Security
+	level &= 0x07
+	micLen := MICLen(level)
+	payloadEnd := len(f.raw) - micLen
+	if payloadEnd < f.payloadStart {
+		sec.MIC = ""
+		return &Decryption{Status: DecryptFailed, Level: level}
+	}
+	mic := f.raw[payloadEnd:]
+	sec.MIC = hex.EncodeToString(mic)
+
+	if f.keyID != 1 {
+		return &Decryption{Status: DecryptUnsupported, Level: level}
+	}
+	if level == SecNone {
+		return &Decryption{Status: DecryptNoSecurity, Level: level}
 	}
 
-	var key NetworkKey
-	key.KeyType = keyType
-	copy(key.Key[:], payload[off:off+keyLength])
-	off += keyLength
+	control := f.control&^0x07 | level
+	aad := make([]byte, f.payloadStart)
+	copy(aad, f.raw[:f.payloadStart])
+	aad[f.auxStart] = control
 
-	// Network key descriptor: key sequence number, destination address and,
-	// in current captures, the source address.
-	if off+1+8 > len(payload) {
-		return NetworkKey{}, false
+	src := f.extSrcWire
+	if len(src) != 8 {
+		// Without an extended nonce the nonce uses the sender's NWK extended
+		// source address, whose wire bytes are already little-endian.
+		src = f.nwkSrc64Wire
 	}
-	key.Sequence = payload[off]
-	off++
-	copy(key.Destination[:], payload[off:off+8])
-	off += 8
-	if off+8 <= len(payload) {
-		copy(key.Source[:], payload[off:off+8])
-		key.HasSource = true
+	if len(src) != 8 {
+		return &Decryption{Status: DecryptFailed, Level: level}
 	}
-	return key, true
+	var nonce [13]byte
+	copy(nonce[0:8], src)
+	binary.LittleEndian.PutUint32(nonce[8:12], f.frameCounter)
+	nonce[12] = control
+
+	ciphertext := f.raw[f.payloadStart:payloadEnd]
+	if len(keys) == 0 {
+		return &Decryption{Status: DecryptNoKey, Level: level}
+	}
+	for i := range keys {
+		plain, ok := ccmStarDecrypt(keys[i][:], nonce[:], aad, ciphertext, mic, level)
+		if ok {
+			index := i
+			return &Decryption{
+				Status:   DecryptOK,
+				Level:    level,
+				KeyIndex: &index,
+				Payload:  hex.EncodeToString(plain),
+			}
+		}
+	}
+	return &Decryption{Status: DecryptFailed, Level: level}
+}
+
+// KeyTypeName names a ZigBee key identifier.
+func KeyTypeName(id uint8) string {
+	switch id {
+	case 0:
+		return "link"
+	case 1:
+		return "network"
+	case 2:
+		return "transport"
+	case 3:
+		return "load"
+	}
+	return ""
+}
+
+func macTypeName(t uint16) string {
+	switch t {
+	case 0:
+		return "beacon"
+	case 1:
+		return "data"
+	case 2:
+		return "ack"
+	case 3:
+		return "command"
+	case 4:
+		return "reserved"
+	case 5:
+		return "multipurpose"
+	case 6:
+		return "fragment"
+	case 7:
+		return "extended"
+	}
+	return ""
+}
+
+func nwkTypeName(t uint16) string {
+	switch t {
+	case 0:
+		return "data"
+	case 1:
+		return "command"
+	case 2:
+		return "reserved"
+	case 3:
+		return "interpan"
+	}
+	return ""
+}
+
+func parseAddr(b []byte, mode uint16) (string, int, error) {
+	switch mode {
+	case 2:
+		if len(b) < 2 {
+			return "", 0, fmt.Errorf("truncated short MAC address")
+		}
+		return shortAddr(b), 2, nil
+	case 3:
+		if len(b) < 8 {
+			return "", 0, fmt.Errorf("truncated extended MAC address")
+		}
+		return extAddr(b, true), 8, nil
+	}
+	return "", 0, fmt.Errorf("unsupported MAC addressing mode %d", mode)
+}
+
+func shortAddr(b []byte) string {
+	return fmt.Sprintf("0x%04x", binary.LittleEndian.Uint16(b))
+}
+
+// extAddr formats an IEEE address. ZigBee carries extended addresses
+// little-endian on the wire, but the auxiliary security header carries them
+// most-significant byte first, matching Wireshark's display.
+func extAddr(b []byte, wireLittleEndian bool) string {
+	if len(b) < 8 {
+		return ""
+	}
+	var v [8]byte
+	copy(v[:], b[:8])
+	if wireLittleEndian {
+		for i, j := 0, 7; i < j; i, j = i+1, j-1 {
+			v[i], v[j] = v[j], v[i]
+		}
+	}
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+		v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
 }
