@@ -50,14 +50,15 @@ type captureStats struct {
 	Frames     uint64
 	ZEP        uint64
 	Pcap       uint64
+	Dropped    uint64
 	Errors     uint64
 	Reconnects uint64
 	Text       uint64
 }
 
 func (s *captureStats) line() string {
-	return fmt.Sprintf("frames=%d zep=%d pcap=%d errors=%d reconnects=%d text_lines=%d",
-		s.Frames, s.ZEP, s.Pcap, s.Errors, s.Reconnects, s.Text)
+	return fmt.Sprintf("frames=%d zep=%d pcap=%d dropped=%d errors=%d reconnects=%d text_lines=%d",
+		s.Frames, s.ZEP, s.Pcap, s.Dropped, s.Errors, s.Reconnects, s.Text)
 }
 
 func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code int) {
@@ -335,6 +336,7 @@ func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *
 			}
 			if udpSink != nil {
 				if err := udpSink.Write(packet); err != nil {
+					stats.Dropped++
 					stats.Errors++
 					log.verbosef("ZEP send: %v", err)
 				} else {
