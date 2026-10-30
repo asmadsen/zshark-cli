@@ -12,6 +12,8 @@ over a serial port and forwards them to Wireshark as ZEP v2 datagrams on UDP
 - Channel selection 11–26, start/stop sniffing.
 - ZEP v2 to a configurable UDP destination (default `127.0.0.1:17754`).
 - Optional direct capture file (pcapng) that opens in Wireshark without a listener.
+- Network-key discovery: listen for APS Transport-Key commands that carry a
+  network key unencrypted, as sent while adopting a device.
 - Linux and macOS; no cgo, no system daemons.
 
 Out of scope for now: firmware detection/flashing, ConBee I (FTDI) and RaspBee,
@@ -23,6 +25,7 @@ live channel switching, Windows.
 zshark list [--json]
 zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
                [--pcap FILE] [--no-zep] [--verbose]
+zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
 ```
 
 - `list` prints candidate ports; `--json` emits the same data as an array.
@@ -36,6 +39,11 @@ zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
 - `--no-zep` disables UDP output (requires `--pcap`).
 - `--verbose` logs serial commands, dongle text and per-frame metadata. Frame
   payloads are never printed.
+- `keys` listens on `--channel` (set it to the network's channel) and prints
+  every network key it sees transported unencrypted in an APS Transport-Key
+  command. Each new key is printed once; `--all` also prints repeats. `--json`
+  switches to one JSON object per line (NDJSON) on stdout. It does not emit ZEP.
+  Keys protected by APS security cannot be read and are ignored.
 - Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
   packet/error summary to stderr and exits cleanly.
 
@@ -56,6 +64,7 @@ packets are counted.
 cmd/zshark/            CLI entry point and flags
 internal/serialport/   port enumeration and open (cross-platform)
 internal/proto/        dongle text commands and 0x01/len/payload/0x04 framing
+internal/zigbee/       802.15.4/NWK/APS decoding of cleartext network keys
 internal/zep/          ZEP v2 header construction
 internal/sink/         UDP and pcapng sinks
 docs/PROTOCOL.md       reverse-engineered wire protocol
@@ -73,13 +82,14 @@ GOOS=darwin GOARCH=amd64 go build -o zshark-darwin-amd64 ./cmd/zshark
 ```
 
 Tests cover envelope framing and resynchronisation, ZEP header bytes, pcapng
-block structure and IPv4 checksums, flag validation, and a golden replay of
-`/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds every data
-datagram from a synthetic serial stream and compares the result byte-for-byte
-with the real capture; it is skipped when the sample file is absent. Set
-`ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample. An additional
-integration test writes the sample's datagrams through the pcapng sink and
-checks the dissection with `tshark`; it is skipped when `tshark` is not
+block structure and IPv4 checksums, IEEE 802.15.4/NWK/APS decoding of network
+key transports (including secured and malformed frames), flag validation, and a
+golden replay of `/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds
+every data datagram from a synthetic serial stream and compares the result
+byte-for-byte with the real capture; it is skipped when the sample file is
+absent. Set `ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample. An
+additional integration test writes the sample's datagrams through the pcapng
+sink and checks the dissection with `tshark`; it is skipped when `tshark` is not
 installed.
 
 Typical use:
@@ -89,10 +99,14 @@ Typical use:
 ./zshark capture --channel 15
 ./zshark capture --no-zep --pcap zigbee.pcapng
 ./zshark capture --dest 192.0.2.10:17754 --verbose
+./zshark keys --channel 15
+./zshark keys --channel 15 --json
 ```
 
 In Wireshark, listen on UDP port 17754 or open the pcapng file directly. The
-capture dissects as `zep -> zigbee`.
+capture dissects as `zep -> zigbee`. The `keys` command is for the adoption
+moment: it prints the network key while a device is being joined, so it can be
+used before Wireshark has the key configured.
 
 ## Reference material
 

@@ -46,6 +46,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return runCapture(ctx, cfg, stderr)
+	case "keys":
+		cfg, err := parseKeysArgs(args[1:], stderr)
+		if err != nil {
+			return flagError(stderr, err)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runKeys(ctx, cfg, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return exitOK
@@ -78,6 +86,12 @@ commands:
         --dest    127.0.0.1:17754
       --pcap additionally writes a pcapng file.
       --no-zep disables UDP output and requires --pcap.
+
+  keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
+      Listen for ZigBee APS Transport-Key commands that carry a network key
+      in clear and print each discovered key. Set --channel to the network's
+      channel. --json prints one JSON object per line. Repeats of the same key
+      are suppressed unless --all is given.
 
 exit codes:
   0 success

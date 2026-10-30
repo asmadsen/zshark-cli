@@ -165,7 +165,8 @@ func TestReadLoopUsesSelectedChannel(t *testing.T) {
 	port := &scriptedPort{data: stream, err: io.EOF}
 
 	log := &captureLogger{w: &bytes.Buffer{}, verbose: true}
-	err = readLoop(context.Background(), port, proto.NewParser(), new(uint32), 11, nil, udpSink, &captureStats{}, log)
+	out := &captureOutput{channel: 11, udp: udpSink, stats: &captureStats{}, log: log}
+	err = readLoop(context.Background(), port, proto.NewParser(), &captureStats{}, log, out.frame)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("readLoop = %v, want io.EOF", err)
 	}

@@ -22,9 +22,10 @@ const (
 )
 
 var (
-	errNoBanner = errors.New("no sniffer banner; wrong or missing firmware")
-	errFirmware = errors.New("dongle reported a failure; wrong or missing firmware")
-	errPcap     = errors.New("pcap write failed")
+	errNoBanner   = errors.New("no sniffer banner; wrong or missing firmware")
+	errFirmware   = errors.New("dongle reported a failure; wrong or missing firmware")
+	errPcap       = errors.New("pcap write failed")
+	errSerialRead = errors.New("serial read failed")
 )
 
 type captureLogger struct {
@@ -96,6 +97,66 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		log.verbosef("sending ZEP to %s", cfg.Dest)
 	}
 
+	out := &captureOutput{
+		channel: cfg.Channel,
+		pcap:    pcapSink,
+		udp:     udpSink,
+		stats:   stats,
+		log:     log,
+	}
+	code = runDevice(ctx, deviceConfig{Port: cfg.Port, Channel: cfg.Channel}, log, stats, out.frame)
+	log.printf("stats: %s", stats.line())
+	return code
+}
+
+// captureOutput turns one raw 802.15.4 frame into a ZEP datagram and writes it
+// to the configured sinks. It is the frame handler for the capture command.
+type captureOutput struct {
+	channel int
+	pcap    *sink.Pcapng
+	udp     *sink.UDP
+	stats   *captureStats
+	log     *captureLogger
+	seq     uint32
+}
+
+func (c *captureOutput) frame(data []byte) error {
+	packet := zep.BuildNTP(data, byte(c.channel), zep.NTPTime(time.Now()), c.seq)
+	thisSeq := c.seq
+	c.seq++
+	c.log.verbosef("frame channel=%d len=%d seq=%d", c.channel, len(data), thisSeq)
+
+	if c.pcap != nil {
+		if err := c.pcap.Write(packet); err != nil {
+			return fmt.Errorf("%w: %v", errPcap, err)
+		}
+		c.stats.Pcap++
+	}
+	if c.udp != nil {
+		if err := c.udp.Write(packet); err != nil {
+			c.stats.Dropped++
+			c.stats.Errors++
+			c.log.verbosef("ZEP send: %v", err)
+		} else {
+			c.stats.ZEP++
+		}
+	}
+	return nil
+}
+
+type deviceConfig struct {
+	Port    string
+	Channel int
+}
+
+// frameHandler consumes one raw 802.15.4 frame (without the dongle envelope).
+type frameHandler func([]byte) error
+
+// runDevice finds and opens the sniffer, starts sniffing on the configured
+// channel, and feeds every frame to handle. Serial failures reconnect with
+// exponential backoff; a handler failure stops the session. The returned value
+// is the process exit code.
+func runDevice(ctx context.Context, cfg deviceConfig, log *captureLogger, stats *captureStats, handle frameHandler) int {
 	device, err := serialport.Find(cfg.Port)
 	if err != nil {
 		log.errorf("%v", err)
@@ -104,7 +165,6 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 	path := device.Path
 	log.verbosef("using serial port %s", path)
 
-	seq := uint32(0)
 	backoff := time.Second
 	everOpened := false
 
@@ -178,7 +238,7 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		everOpened = true
 		log.verbosef("starting sniff on channel %d", cfg.Channel)
 
-		readErr := readLoop(ctx, port, parser, &seq, cfg.Channel, pcapSink, udpSink, stats, log)
+		readErr := readLoop(ctx, port, parser, stats, log, handle)
 		log.verbosef("-> idle (shutdown)")
 		_ = serialport.WriteCommand(port, proto.CmdIdle)
 		_ = port.Close()
@@ -189,9 +249,8 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		if readErr == nil {
 			break
 		}
-		if errors.Is(readErr, errPcap) {
+		if !errors.Is(readErr, errSerialRead) {
 			log.errorf("%v", readErr)
-			log.printf("stats: %s", stats.line())
 			return exitRuntime
 		}
 		stats.Errors++
@@ -206,7 +265,6 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		backoff = nextBackoff(backoff)
 	}
 
-	log.printf("stats: %s", stats.line())
 	return exitOK
 }
 
@@ -289,7 +347,7 @@ func isSnifferBanner(line string) bool {
 	return strings.Contains(line, "Sniffer") || strings.Contains(line, "PLATFORM:")
 }
 
-func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, channel int, pcapSink *sink.Pcapng, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
+func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, stats *captureStats, log *captureLogger, handle frameHandler) error {
 	buf := make([]byte, 4096)
 	lastStats := time.Now()
 	for {
@@ -298,7 +356,7 @@ func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *
 		}
 		n, err := port.Read(buf)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errSerialRead, err)
 		}
 		if n == 0 {
 			if log.verbose && time.Since(lastStats) >= statsInterval {
@@ -330,25 +388,8 @@ func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *
 				log.verbosef("skipping frame with %d data bytes", len(data))
 				continue
 			}
-			packet := zep.BuildNTP(data, byte(channel), zep.NTPTime(time.Now()), *seq)
-			thisSeq := *seq
-			(*seq)++
-			log.verbosef("frame channel=%d len=%d seq=%d", channel, len(data), thisSeq)
-
-			if pcapSink != nil {
-				if err := pcapSink.Write(packet); err != nil {
-					return fmt.Errorf("%w: %v", errPcap, err)
-				}
-				stats.Pcap++
-			}
-			if udpSink != nil {
-				if err := udpSink.Write(packet); err != nil {
-					stats.Dropped++
-					stats.Errors++
-					log.verbosef("ZEP send: %v", err)
-				} else {
-					stats.ZEP++
-				}
+			if err := handle(data); err != nil {
+				return err
 			}
 		}
 

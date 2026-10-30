@@ -23,11 +23,23 @@ type captureConfig struct {
 	Verbose bool
 }
 
+type keysConfig struct {
+	Port    string
+	Channel int
+	JSON    bool
+	All     bool
+	Verbose bool
+}
+
 func defaultCaptureConfig() captureConfig {
 	return captureConfig{
 		Channel: defaultChannel,
 		Dest:    defaultDest,
 	}
+}
+
+func defaultKeysConfig() keysConfig {
+	return keysConfig{Channel: defaultChannel}
 }
 
 func parseCaptureArgs(args []string, stderr io.Writer) (captureConfig, error) {
@@ -59,6 +71,32 @@ func parseCaptureArgs(args []string, stderr io.Writer) (captureConfig, error) {
 	}
 	if cfg.NoZEP && cfg.Pcap == "" {
 		return cfg, fmt.Errorf("--no-zep requires --pcap")
+	}
+	return cfg, nil
+}
+
+func parseKeysArgs(args []string, stderr io.Writer) (keysConfig, error) {
+	cfg := defaultKeysConfig()
+	fs := flag.NewFlagSet("keys", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&cfg.Port, "port", "", "serial port path (auto-detected when omitted)")
+	fs.IntVar(&cfg.Channel, "channel", defaultChannel, "ZigBee channel (11-26)")
+	fs.BoolVar(&cfg.JSON, "json", false, "print one JSON object per key")
+	fs.BoolVar(&cfg.All, "all", false, "print repeated transports of the same key")
+	fs.BoolVar(&cfg.Verbose, "verbose", false, "verbose logging to stderr")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return cfg, err
+	}
+	if fs.NArg() != 0 {
+		return cfg, fmt.Errorf("unexpected argument(s): %s", strings.Join(fs.Args(), " "))
+	}
+	if cfg.Channel < 11 || cfg.Channel > 26 {
+		return cfg, fmt.Errorf("--channel must be between 11 and 26 (got %d)", cfg.Channel)
 	}
 	return cfg, nil
 }

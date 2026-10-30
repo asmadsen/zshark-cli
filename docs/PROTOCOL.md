@@ -94,6 +94,13 @@ Offset 8 is confirmed by the frame control field at the start of the raw frame:
 `02 00` (ACK) and `41 88`/`61 88` (data frames with PAN compression and
 extended source addresses) are all sane. **Observed**
 
+Every data frame in the real capture also ends with two metadata bytes: RSSI
+and an LQI byte whose bit 7 marks a valid CRC. Wireshark interprets the last two
+bytes of a ZEP frame as TI CC24xx metadata, which is why its dissection reports
+`FCS OK`/`FCS Bad` even though the dongle never sends the real FCS. Protocol
+decoders must therefore parse forward from the start of the frame and must not
+assume the final byte belongs to the MAC payload. **Observed** (31/31 frames)
+
 The earlier reading that `PAYLOAD[4]` is the channel came from the sample ZEP
 header, not from the serial stream; that datagram was built by the GUI from its
 own channel setting.
@@ -152,3 +159,41 @@ The original uses `deCONZ::DeviceEnumerator` plus `QSerialPortInfo`. For v0:
 - Linux: `/dev/ttyACM*`; prefer the port whose USB IDs are `1cf1:0030`.
 - macOS: `/dev/tty.usbmodem*` and `/dev/cu.usbmodem*`.
 - Always allow an explicit `--port`.
+
+## 7. Network key transport (sniffer aid)
+
+When a device is adopted, the Trust Center sends it the network key in an APS
+Transport-Key command. The command normally sits inside an APS frame that is
+protected by the Trust Center Link Key, but while adopting a device it can be
+sent with APS security disabled, which leaves the key readable on air. The
+`keys` command decodes exactly that case.
+
+Frame path for an unsecured transport (all fields **observed** in Wireshark for
+a synthetic frame built from the formats below):
+
+```
+802.15.4 data frame
+  MAC header (PAN ID, addresses)
+  NWK data frame (security bit clear)
+    APS command frame (security bit clear)
+      Frame control       0x01
+      APS counter         1 byte
+      Command identifier  0x05 (Transport Key)
+      Key type            0x01 standard network, 0x05 high-security network
+      Key                 16 bytes
+      Key sequence        1 byte
+      Destination EUI-64  8 bytes, little endian on the wire
+      Source EUI-64       8 bytes, little endian on the wire
+```
+
+Wireshark's field names are `zbee_aps.cmd.id == 0x05`,
+`zbee_aps.cmd.key_type` (0x01 = Standard Network Key, 0x05 = High-Security
+Network Key), `zbee_aps.cmd.key`, `zbee_aps.cmd.seqno`, `zbee_aps.cmd.dst` and
+`zbee_aps.cmd.src`. This descriptor order (key, sequence, destination, source)
+matches Wireshark and differs from the order in some older spec excerpts.
+
+`internal/zigbee` parses the MAC, NWK and APS headers only far enough to find
+this command. It rejects frames secured at any layer, other key types and
+malformed/truncated frames. Because the commands are unencrypted, no keys are
+stored or used to decrypt anything; the tool only reports what was already in
+clear on the selected channel.
