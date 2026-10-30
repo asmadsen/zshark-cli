@@ -39,6 +39,31 @@ The firmware (`sniffer_v1_0.bin`) contains these formats:
 Unknown: exact ConBee II banner string and startup timing. Treat any banner
 containing `Sniffer` as success; treat `fail` or silence beyond ~2 s as failure.
 
+### Stock ConBee II response (measured live)
+
+The stock ConBee II (deCONZ firmware, `DE2490137`, reported `ConBee2 V2.0`) does
+not emit a `Sniffer` banner. It echoes each command as `> <cmd>\r\n`, then
+answers. `OK` is not newline-terminated:
+
+```
+> idle
+OK
+> parms
+
+PLATFORM: ConBee2 V2.0
+CURR_CMSK: 0x07fff800
+CURR_CHAN: 11
+
+OK
+> chan 15
+OK
+> sniff
+Receiving...OK
+```
+
+The CLI accepts either a `Sniffer` banner or a line containing `PLATFORM:` as
+success. **Observed** (live, 2026-10-30).
+
 ## 3. Binary frame envelope (dongle → host)
 
 `Connection::readData` at `0x24f50` is a byte-oriented state machine:

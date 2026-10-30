@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"go.bug.st/serial"
+
+	"zshark/internal/proto"
 	"zshark/internal/serialport"
 )
 
@@ -68,5 +73,64 @@ func TestRunCaptureUsageError(t *testing.T) {
 func TestRunCaptureHelp(t *testing.T) {
 	if code := run([]string{"capture", "--help"}, &bytes.Buffer{}, &bytes.Buffer{}); code != exitOK {
 		t.Errorf("exit = %d, want 0", code)
+	}
+}
+
+// scriptedPort serves a fixed byte stream through Read. waitBanner only uses
+// Read, so the embedded interface's other methods are never called.
+type scriptedPort struct {
+	serial.Port
+	data []byte
+}
+
+func (p *scriptedPort) Read(b []byte) (int, error) {
+	if len(p.data) == 0 {
+		return 0, nil
+	}
+	n := copy(b, p.data)
+	p.data = p.data[n:]
+	return n, nil
+}
+
+func TestWaitBannerConBeeII(t *testing.T) {
+	// Exact parms response from a stock ConBee II (DE2490137, firmware 2.0).
+	port := &scriptedPort{data: []byte("> parms\r\n\r\nPLATFORM: ConBee2 V2.0\r\nCURR_CMSK: 0x07fff800\r\nCURR_CHAN: 11\r\n\r\nOK")}
+	var logs bytes.Buffer
+	log := &captureLogger{w: &logs, verbose: true}
+	if err := waitBanner(context.Background(), port, proto.NewParser(), log, &captureStats{}); err != nil {
+		t.Fatalf("waitBanner = %v, want nil\nlogs: %s", err, logs.String())
+	}
+	if !strings.Contains(logs.String(), "PLATFORM: ConBee2 V2.0") {
+		t.Errorf("verbose log missing banner line:\n%s", logs.String())
+	}
+}
+
+func TestWaitBannerFirmwareFailure(t *testing.T) {
+	port := &scriptedPort{data: []byte("> parms\r\nfail\r\n")}
+	log := &captureLogger{w: &bytes.Buffer{}, verbose: true}
+	err := waitBanner(context.Background(), port, proto.NewParser(), log, &captureStats{})
+	if !errors.Is(err, errFirmware) {
+		t.Errorf("waitBanner = %v, want %v", err, errFirmware)
+	}
+}
+
+func TestIsSnifferBanner(t *testing.T) {
+	for _, line := range []string{
+		"Sniffer V1.0 [ConBee II]",
+		"PLATFORM: ConBee2 V2.0",
+	} {
+		if !isSnifferBanner(line) {
+			t.Errorf("isSnifferBanner(%q) = false, want true", line)
+		}
+	}
+	for _, line := range []string{
+		"> parms",
+		"OK",
+		"CURR_CHAN: 11",
+		"Receiving...OK",
+	} {
+		if isSnifferBanner(line) {
+			t.Errorf("isSnifferBanner(%q) = true, want false", line)
+		}
 	}
 }

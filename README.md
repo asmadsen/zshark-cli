@@ -43,7 +43,9 @@ Exit codes: `0` success, `1` runtime/file/socket error, `2` usage error,
 `3` serial device unavailable, `4` dongle firmware/banner failure.
 
 On startup the tool sends `idle` and `parms`, waits up to two seconds for a
-banner containing `Sniffer`, then sends `chan <n>` and `sniff`. After a serial
+banner (`Sniffer V...` from the dedicated sniffer firmware, or
+`PLATFORM: ConBee2 ...` from the stock ConBee II firmware), then sends
+`chan <n>` and `sniff`. After a serial
 disconnect it re-enumerates an auto-detected port and reconnects with
 exponential backoff; UDP send failures reconnect with backoff while dropped
 packets are counted.

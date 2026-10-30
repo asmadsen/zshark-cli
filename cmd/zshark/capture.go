@@ -244,7 +244,7 @@ func waitBanner(ctx context.Context, port serial.Port, parser *proto.Parser, log
 			for _, line := range parser.FlushText() {
 				stats.Text++
 				log.verbosef("dongle: %s", line)
-				if strings.Contains(line, "Sniffer") {
+				if isSnifferBanner(line) {
 					return nil
 				}
 				if strings.Contains(strings.ToLower(line), "fail") {
@@ -265,7 +265,7 @@ func waitBanner(ctx context.Context, port serial.Port, parser *proto.Parser, log
 		for _, line := range result.Text {
 			stats.Text++
 			log.verbosef("dongle: %s", line)
-			if strings.Contains(line, "Sniffer") {
+			if isSnifferBanner(line) {
 				return nil
 			}
 			if strings.Contains(strings.ToLower(line), "fail") {
@@ -279,6 +279,14 @@ func waitBanner(ctx context.Context, port serial.Port, parser *proto.Parser, log
 		// Frames received during the banner exchange are pre-sniff traffic and
 		// are intentionally ignored.
 	}
+}
+
+// isSnifferBanner reports whether a dongle status line confirms a usable
+// sniffer. The dedicated sniffer firmware sends a "Sniffer V..." banner; the
+// stock ConBee II (deCONZ) firmware answers `parms` with a block starting
+// "PLATFORM: ConBee2 ..." instead.
+func isSnifferBanner(line string) bool {
+	return strings.Contains(line, "Sniffer") || strings.Contains(line, "PLATFORM:")
 }
 
 func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, pcapSink *sink.Pcapng, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
