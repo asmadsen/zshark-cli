@@ -94,6 +94,13 @@ Offset 8 is confirmed by the frame control field at the start of the raw frame:
 `02 00` (ACK) and `41 88`/`61 88` (data frames with PAN compression and
 extended source addresses) are all sane. **Observed**
 
+The final two bytes of the raw frame are not 802.15.4 data: the sniffer appends
+ChipCon/TI CC24xx metadata (`RSSI`, then an FCS-valid bit plus LQI). Wireshark
+strips them in ZEP LQI mode, and the JSONL sink exposes them as
+`radio.rssi`/`radio.lqi`/`radio.fcsValid`. **Observed** (real capture and live
+pty replay: every frame ended with `XX 80`, where `0x80` is FCS-valid and LQI
+0).
+
 The earlier reading that `PAYLOAD[4]` is the channel came from the sample ZEP
 header, not from the serial stream; that datagram was built by the GUI from its
 own channel setting.
@@ -144,6 +151,10 @@ ZEP datagrams in synthetic Ethernet/IPv4/UDP headers. Do the same for pcapng:
 - Timestamps from the ZEP header.
 
 This lets `zshark capture --no-zep --pcap out.pcapng` work with no listener.
+
+An alternative, `--jsonl FILE`, writes one JSON object per 802.15.4 frame with
+no capture plumbing, and can decrypt NWK-secured payloads with `--network-key`.
+See [JSONL.md](JSONL.md).
 
 ## 6. Device discovery
 

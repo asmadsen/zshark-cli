@@ -45,7 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return runCapture(ctx, cfg, stderr)
+		return runCapture(ctx, cfg, stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return exitOK
@@ -72,12 +72,16 @@ commands:
       List candidate serial ports. ConBee II (1cf1:0030) is preferred.
 
   capture [--port PATH] [--channel N] [--dest IP:PORT]
-          [--pcap FILE] [--no-zep] [--verbose]
+          [--pcap FILE] [--jsonl FILE] [--network-key HEX]
+          [--security-level N] [--no-zep] [--verbose]
       Capture 802.15.4 frames and emit ZEP v2. Defaults:
         --channel 11
         --dest    127.0.0.1:17754
       --pcap additionally writes a pcapng file.
-      --no-zep disables UDP output and requires --pcap.
+      --jsonl additionally writes one JSON object per ZigBee frame
+              (use - for stdout); --network-key decrypts secured
+              payloads.
+      --no-zep disables UDP output and requires --pcap or --jsonl.
 
 exit codes:
   0 success

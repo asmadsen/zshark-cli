@@ -12,6 +12,8 @@ over a serial port and forwards them to Wireshark as ZEP v2 datagrams on UDP
 - Channel selection 11–26, start/stop sniffing.
 - ZEP v2 to a configurable UDP destination (default `127.0.0.1:17754`).
 - Optional direct capture file (pcapng) that opens in Wireshark without a listener.
+- Optional JSON Lines output with only ZigBee data, plus network-key
+  decryption of NWK-secured payloads.
 - Linux and macOS; no cgo, no system daemons.
 
 Out of scope for now: firmware detection/flashing, ConBee I (FTDI) and RaspBee,
@@ -22,7 +24,8 @@ live channel switching, Windows.
 ```
 zshark list [--json]
 zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
-               [--pcap FILE] [--no-zep] [--verbose]
+               [--pcap FILE] [--jsonl FILE] [--network-key HEX]
+               [--security-level N] [--no-zep] [--verbose]
 ```
 
 - `list` prints candidate ports; `--json` emits the same data as an array.
@@ -33,7 +36,17 @@ zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
 - `--pcap` writes a pcapng file with synthetic Ethernet/IPv4/UDP framing so
   Wireshark dissects `zep -> zigbee` directly. The file is usable while the
   capture is still running.
-- `--no-zep` disables UDP output (requires `--pcap`).
+- `--jsonl` writes one JSON object per 802.15.4 frame, without any capture
+  plumbing (no Ethernet/IPv4/UDP/ZEP). Use `-` for stdout. See
+  [docs/JSONL.md](docs/JSONL.md).
+- `--network-key` supplies a ZigBee network key for `--jsonl` decryption.
+  Repeat it to try several keys. Keys are 16 bytes of hex with optional `:`,
+  `-`, or space separators.
+- `--security-level` is the ZigBee security level used for decryption (0–7,
+  default 5: AES-128 encryption with a 32-bit MIC). ZigBee devices commonly
+  transmit level 0 in the auxiliary header, so this is configured out of band,
+  as Wireshark does.
+- `--no-zep` disables UDP output (requires `--pcap` or `--jsonl`).
 - `--verbose` logs serial commands, dongle text and per-frame metadata. Frame
   payloads are never printed.
 - Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
@@ -57,8 +70,10 @@ cmd/zshark/            CLI entry point and flags
 internal/serialport/   port enumeration and open (cross-platform)
 internal/proto/        dongle text commands and 0x01/len/payload/0x04 framing
 internal/zep/          ZEP v2 header construction
-internal/sink/         UDP and pcapng sinks
+internal/zigbee/       802.15.4/NWK decoding and CCM* decryption
+internal/sink/         UDP, pcapng and JSONL sinks
 docs/PROTOCOL.md       reverse-engineered wire protocol
+docs/JSONL.md          JSON Lines output format
 ```
 
 ## Build and test
@@ -73,7 +88,8 @@ GOOS=darwin GOARCH=amd64 go build -o zshark-darwin-amd64 ./cmd/zshark
 ```
 
 Tests cover envelope framing and resynchronisation, ZEP header bytes, pcapng
-block structure and IPv4 checksums, flag validation, and a golden replay of
+block structure and IPv4 checksums, JSONL structure, 802.15.4/NWK header
+decoding, CCM* decryption vectors, flag validation, and a golden replay of
 `/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds every data
 datagram from a synthetic serial stream and compares the result byte-for-byte
 with the real capture; it is skipped when the sample file is absent. Set
@@ -88,6 +104,8 @@ Typical use:
 ./zshark list
 ./zshark capture --channel 15
 ./zshark capture --no-zep --pcap zigbee.pcapng
+./zshark capture --no-zep --jsonl zigbee.jsonl
+./zshark capture --no-zep --jsonl - --network-key 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
 ./zshark capture --dest 192.0.2.10:17754 --verbose
 ```
 

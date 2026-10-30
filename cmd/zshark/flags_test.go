@@ -18,7 +18,8 @@ func TestCaptureDefaults(t *testing.T) {
 	if cfg.Dest != "127.0.0.1:17754" {
 		t.Errorf("dest = %q", cfg.Dest)
 	}
-	if cfg.Port != "" || cfg.Pcap != "" || cfg.NoZEP || cfg.Verbose {
+	if cfg.Port != "" || cfg.Pcap != "" || cfg.JSONL != "" || len(cfg.NetworkKeys) != 0 ||
+		cfg.SecurityLevel != 5 || cfg.NoZEP || cfg.Verbose {
 		t.Errorf("unexpected default: %+v", cfg)
 	}
 }
@@ -29,6 +30,9 @@ func TestCaptureAllFlags(t *testing.T) {
 		"--channel", "26",
 		"--dest", "192.0.2.10:17754",
 		"--pcap", "out.pcapng",
+		"--jsonl", "out.jsonl",
+		"--network-key", "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+		"--security-level", "6",
 		"--no-zep",
 		"--verbose",
 	}, &bytes.Buffer{})
@@ -36,8 +40,14 @@ func TestCaptureAllFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Port != "/dev/ttyACM0" || cfg.Channel != 26 || cfg.Dest != "192.0.2.10:17754" ||
-		cfg.Pcap != "out.pcapng" || !cfg.NoZEP || !cfg.Verbose {
+		cfg.Pcap != "out.pcapng" || cfg.JSONL != "out.jsonl" || !cfg.NoZEP || !cfg.Verbose {
 		t.Errorf("config = %+v", cfg)
+	}
+	if len(cfg.NetworkKeys) != 1 || cfg.NetworkKeys[0][0] != 0x00 || cfg.NetworkKeys[0][15] != 0xff {
+		t.Errorf("network keys = %x", cfg.NetworkKeys)
+	}
+	if cfg.SecurityLevel != 6 {
+		t.Errorf("security level = %d, want 6", cfg.SecurityLevel)
 	}
 }
 
@@ -80,13 +90,53 @@ func TestCaptureDestValidation(t *testing.T) {
 	}
 }
 
-func TestCaptureNoZEPRequiresPcap(t *testing.T) {
+func TestCaptureNoZEPRequiresOutput(t *testing.T) {
 	_, err := parseCaptureArgs([]string{"--no-zep"}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "--pcap") {
-		t.Fatalf("error = %v, want --pcap requirement", err)
+	if err == nil || !strings.Contains(err.Error(), "--pcap or --jsonl") {
+		t.Fatalf("error = %v, want --pcap/--jsonl requirement", err)
 	}
-	if _, err := parseCaptureArgs([]string{"--no-zep", "--pcap", "x.pcapng"}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("valid combination rejected: %v", err)
+	for _, args := range [][]string{
+		{"--no-zep", "--pcap", "x.pcapng"},
+		{"--no-zep", "--jsonl", "x.jsonl"},
+	} {
+		if _, err := parseCaptureArgs(args, &bytes.Buffer{}); err != nil {
+			t.Fatalf("valid combination rejected: %v", err)
+		}
+	}
+}
+
+func TestCaptureNetworkKeyValidation(t *testing.T) {
+	valid := []string{
+		"00112233445566778899aabbccddeeff",
+		"00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+		"0011-2233-4455-6677-8899-aabb-ccdd-eeff",
+		"0x00112233445566778899aabbccddeeff",
+	}
+	for _, key := range valid {
+		if _, err := parseCaptureArgs([]string{"--jsonl", "-", "--network-key", key}, &bytes.Buffer{}); err != nil {
+			t.Errorf("key %q rejected: %v", key, err)
+		}
+	}
+	for _, key := range []string{"", "0011", "00112233445566778899aabbccddee", "00112233445566778899aabbccddeefg"} {
+		if _, err := parseCaptureArgs([]string{"--jsonl", "-", "--network-key", key}, &bytes.Buffer{}); err == nil {
+			t.Errorf("key %q accepted", key)
+		}
+	}
+	if _, err := parseCaptureArgs([]string{"--network-key", valid[0]}, &bytes.Buffer{}); err == nil {
+		t.Error("network key accepted without --jsonl")
+	}
+}
+
+func TestCaptureSecurityLevelValidation(t *testing.T) {
+	for _, level := range []string{"0", "7"} {
+		if _, err := parseCaptureArgs([]string{"--security-level", level}, &bytes.Buffer{}); err != nil {
+			t.Errorf("level %s rejected: %v", level, err)
+		}
+	}
+	for _, level := range []string{"-1", "8"} {
+		if _, err := parseCaptureArgs([]string{"--security-level", level}, &bytes.Buffer{}); err == nil {
+			t.Errorf("level %s accepted", level)
+		}
 	}
 }
 

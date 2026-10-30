@@ -25,6 +25,7 @@ var (
 	errNoBanner = errors.New("no sniffer banner; wrong or missing firmware")
 	errFirmware = errors.New("dongle reported a failure; wrong or missing firmware")
 	errPcap     = errors.New("pcap write failed")
+	errJSONL    = errors.New("JSONL write failed")
 )
 
 type captureLogger struct {
@@ -50,6 +51,7 @@ type captureStats struct {
 	Frames     uint64
 	ZEP        uint64
 	Pcap       uint64
+	JSONL      uint64
 	Dropped    uint64
 	Errors     uint64
 	Reconnects uint64
@@ -57,11 +59,11 @@ type captureStats struct {
 }
 
 func (s *captureStats) line() string {
-	return fmt.Sprintf("frames=%d zep=%d pcap=%d dropped=%d errors=%d reconnects=%d text_lines=%d",
-		s.Frames, s.ZEP, s.Pcap, s.Dropped, s.Errors, s.Reconnects, s.Text)
+	return fmt.Sprintf("frames=%d zep=%d pcap=%d jsonl=%d dropped=%d errors=%d reconnects=%d text_lines=%d",
+		s.Frames, s.ZEP, s.Pcap, s.JSONL, s.Dropped, s.Errors, s.Reconnects, s.Text)
 }
 
-func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code int) {
+func runCapture(ctx context.Context, cfg captureConfig, stdout, stderr io.Writer) (code int) {
 	log := &captureLogger{w: stderr, verbose: cfg.Verbose}
 	stats := &captureStats{}
 
@@ -82,6 +84,29 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 			}
 		}()
 		log.verbosef("writing pcapng to %s", cfg.Pcap)
+	}
+
+	var jsonSink *sink.JSONL
+	if cfg.JSONL != "" {
+		var err error
+		if cfg.JSONL == "-" {
+			jsonSink = sink.NewJSONL(stdout, cfg.NetworkKeys, uint8(cfg.SecurityLevel))
+		} else {
+			jsonSink, err = sink.NewJSONLFile(cfg.JSONL, cfg.NetworkKeys, uint8(cfg.SecurityLevel))
+			if err != nil {
+				log.errorf("create %s: %v", cfg.JSONL, err)
+				return exitRuntime
+			}
+		}
+		defer func() {
+			if err := jsonSink.Close(); err != nil {
+				log.errorf("close %s: %v", cfg.JSONL, err)
+				if code == exitOK {
+					code = exitRuntime
+				}
+			}
+		}()
+		log.verbosef("writing JSONL to %s", cfg.JSONL)
 	}
 
 	var udpSink *sink.UDP
@@ -178,7 +203,7 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 		everOpened = true
 		log.verbosef("starting sniff on channel %d", cfg.Channel)
 
-		readErr := readLoop(ctx, port, parser, &seq, cfg.Channel, pcapSink, udpSink, stats, log)
+		readErr := readLoop(ctx, port, parser, &seq, cfg.Channel, pcapSink, jsonSink, udpSink, stats, log)
 		log.verbosef("-> idle (shutdown)")
 		_ = serialport.WriteCommand(port, proto.CmdIdle)
 		_ = port.Close()
@@ -190,6 +215,11 @@ func runCapture(ctx context.Context, cfg captureConfig, stderr io.Writer) (code 
 			break
 		}
 		if errors.Is(readErr, errPcap) {
+			log.errorf("%v", readErr)
+			log.printf("stats: %s", stats.line())
+			return exitRuntime
+		}
+		if errors.Is(readErr, errJSONL) {
 			log.errorf("%v", readErr)
 			log.printf("stats: %s", stats.line())
 			return exitRuntime
@@ -289,7 +319,7 @@ func isSnifferBanner(line string) bool {
 	return strings.Contains(line, "Sniffer") || strings.Contains(line, "PLATFORM:")
 }
 
-func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, channel int, pcapSink *sink.Pcapng, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
+func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *uint32, channel int, pcapSink *sink.Pcapng, jsonSink *sink.JSONL, udpSink *sink.UDP, stats *captureStats, log *captureLogger) error {
 	buf := make([]byte, 4096)
 	lastStats := time.Now()
 	for {
@@ -340,6 +370,12 @@ func readLoop(ctx context.Context, port serial.Port, parser *proto.Parser, seq *
 					return fmt.Errorf("%w: %v", errPcap, err)
 				}
 				stats.Pcap++
+			}
+			if jsonSink != nil {
+				if err := jsonSink.Write(packet); err != nil {
+					return fmt.Errorf("%w: %v", errJSONL, err)
+				}
+				stats.JSONL++
 			}
 			if udpSink != nil {
 				if err := udpSink.Write(packet); err != nil {
