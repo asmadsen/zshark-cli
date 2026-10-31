@@ -190,7 +190,7 @@ func ParseKey(s string) ([16]byte, error) {
 		digits = append(digits, t[i])
 	}
 	if len(digits) != 32 {
-		return key, fmt.Errorf("network key must be 16 bytes (32 hex digits), got %d hex digits", len(digits))
+		return key, fmt.Errorf("key must be 16 bytes (32 hex digits), got %d hex digits", len(digits))
 	}
 	for i := 0; i < 16; i++ {
 		hi, ok := hexNibble(digits[2*i])

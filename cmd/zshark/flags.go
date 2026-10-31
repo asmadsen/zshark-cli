@@ -30,11 +30,12 @@ type captureConfig struct {
 }
 
 type keysConfig struct {
-	Port    string
-	Channel int
-	JSON    bool
-	All     bool
-	Verbose bool
+	Port            string
+	Channel         int
+	TrustCenterKeys [][16]byte
+	JSON            bool
+	All             bool
+	Verbose         bool
 }
 
 func defaultCaptureConfig() captureConfig {
@@ -49,14 +50,14 @@ func defaultKeysConfig() keysConfig {
 	return keysConfig{Channel: defaultChannel}
 }
 
-// networkKeys collects repeatable --network-key flags.
-type networkKeys [][16]byte
+// keyList collects repeatable key flags.
+type keyList [][16]byte
 
-func (k *networkKeys) String() string {
+func (k *keyList) String() string {
 	return fmt.Sprintf("%d key(s)", len(*k))
 }
 
-func (k *networkKeys) Set(value string) error {
+func (k *keyList) Set(value string) error {
 	key, err := zigbee.ParseKey(value)
 	if err != nil {
 		return err
@@ -67,7 +68,7 @@ func (k *networkKeys) Set(value string) error {
 
 func parseCaptureArgs(args []string, stderr io.Writer) (captureConfig, error) {
 	cfg := defaultCaptureConfig()
-	var keys networkKeys
+	var keys keyList
 	fs := flag.NewFlagSet("capture", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&cfg.Port, "port", "", "serial port path (auto-detected when omitted)")
@@ -111,15 +112,17 @@ func parseCaptureArgs(args []string, stderr io.Writer) (captureConfig, error) {
 
 func parseKeysArgs(args []string, stderr io.Writer) (keysConfig, error) {
 	cfg := defaultKeysConfig()
+	var tcKeys keyList
 	fs := flag.NewFlagSet("keys", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&cfg.Port, "port", "", "serial port path (auto-detected when omitted)")
 	fs.IntVar(&cfg.Channel, "channel", defaultChannel, "ZigBee channel (11-26)")
+	fs.Var(&tcKeys, "trust-center-key", "Trust Center link key for APS-secured transports (16 bytes hex; repeatable)")
 	fs.BoolVar(&cfg.JSON, "json", false, "print one JSON object per key")
 	fs.BoolVar(&cfg.All, "all", false, "print repeated transports of the same key")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "verbose logging to stderr")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]")
+		fmt.Fprintln(stderr, "usage: zshark keys [--port PATH] [--channel N] [--trust-center-key HEX] [--json] [--all] [--verbose]")
 		fs.PrintDefaults()
 	}
 
@@ -132,6 +135,7 @@ func parseKeysArgs(args []string, stderr io.Writer) (keysConfig, error) {
 	if cfg.Channel < 11 || cfg.Channel > 26 {
 		return cfg, fmt.Errorf("--channel must be between 11 and 26 (got %d)", cfg.Channel)
 	}
+	cfg.TrustCenterKeys = tcKeys
 	return cfg, nil
 }
 

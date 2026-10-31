@@ -15,7 +15,7 @@ over a serial port and forwards them to Wireshark as ZEP v2 datagrams on UDP
 - Optional JSON Lines output with only ZigBee data, plus network-key
   decryption of NWK-secured payloads.
 - Network-key discovery: listen for APS Transport-Key commands that carry a
-  network key unencrypted, as sent while adopting a device.
+  network key, either in clear or protected with a Trust Center link key.
 - Linux and macOS; no cgo, no system daemons.
 
 Out of scope for now: firmware detection/flashing, ConBee I (FTDI) and RaspBee,
@@ -28,7 +28,8 @@ zshark list [--json]
 zshark capture [--port PATH] [--channel N] [--dest IP:PORT]
                [--pcap FILE] [--jsonl FILE] [--network-key HEX]
                [--security-level N] [--no-zep] [--verbose]
-zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
+zshark keys [--port PATH] [--channel N] [--trust-center-key HEX]
+            [--json] [--all] [--verbose]
 ```
 
 - `list` prints candidate ports; `--json` emits the same data as an array.
@@ -53,11 +54,13 @@ zshark keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
 - `--verbose` logs serial commands, dongle text and per-frame metadata. Frame
   payloads are never printed.
 - `keys` listens on `--channel` (set it to the network's channel) and prints
-  every network key it sees transported unencrypted in an APS Transport-Key
-  command. Each new key is printed once; `--all` also prints repeats. `--json`
-  switches to one JSON object per line (NDJSON) on stdout. It does not emit ZEP.
-  Keys protected by APS security cannot be read and are ignored. See
-  [docs/KEYS.md](docs/KEYS.md) for the text and JSON fields.
+  every network key it sees in an APS Transport-Key command. Clear commands
+  are read directly; `--trust-center-key` (repeatable) decrypts commands
+  protected with that Trust Center link key, including the well-known
+  `ZigBeeAlliance09` key. Each new key is printed once; `--all` also prints
+  repeats. `--json` switches to one JSON object per line (NDJSON) on stdout.
+  It does not emit ZEP. Keys protected by other link, transport or load keys
+  are ignored. See [docs/KEYS.md](docs/KEYS.md) for the text and JSON fields.
 - Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
   packet/error summary to stderr and exits cleanly.
 
@@ -155,6 +158,7 @@ Typical use:
 ./zshark capture --no-zep --jsonl - --network-key 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
 ./zshark capture --dest 192.0.2.10:17754 --verbose
 ./zshark keys --channel 15
+./zshark keys --channel 15 --trust-center-key 5a6967426565416c6c69616e63653039
 ./zshark keys --channel 15 --json
 ```
 

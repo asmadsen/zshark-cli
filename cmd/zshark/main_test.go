@@ -192,7 +192,7 @@ func TestReadLoopUsesSelectedChannel(t *testing.T) {
 }
 
 func TestReadLoopWritesJSONL(t *testing.T) {
-	frame, err := hex.DecodeString("6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225d771bbdc")
+	frame, err := hex.DecodeString("6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225217dd486")
 	if err != nil {
 		t.Fatal(err)
 	}
