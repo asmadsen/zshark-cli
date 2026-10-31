@@ -38,7 +38,9 @@ The firmware (`sniffer_v1_0.bin`) contains these formats:
   “no or wrong firmware” and offers to flash
 
 Unknown: exact ConBee II banner string and startup timing. Treat any banner
-containing `Sniffer` as success; treat `fail` or silence beyond ~2 s as failure.
+containing `Sniffer` as success; treat `fail` or silence beyond ~2 s per
+handshake attempt as failure. The CLI retries the handshake a few times because
+a freshly opened CDC port can reset the dongle or still be draining frames.
 
 ### Stock ConBee II response (measured live)
 

@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	bannerTimeout = 2 * time.Second
-	statsInterval = 30 * time.Second
+	bannerTimeout    = 2 * time.Second
+	bannerAttempts   = 3
+	bannerRetryDelay = 500 * time.Millisecond
+	statsInterval    = 30 * time.Second
 )
 
 var (
@@ -196,15 +198,39 @@ func runDevice(ctx context.Context, cfg deviceConfig, log *captureLogger, stats 
 }
 
 func startSniff(ctx context.Context, port serial.Port, parser *proto.Parser, channel int, log *captureLogger, stats *captureStats) error {
-	log.verbosef("-> idle")
-	if err := serialport.WriteCommand(port, proto.CmdIdle); err != nil {
-		return fmt.Errorf("send idle: %w", err)
+	// Opening a USB CDC port can reset the dongle, and a previous session may
+	// still be streaming frames. Both leave the link noisy for a moment, so a
+	// single idle/parms exchange with a two-second deadline is not reliable.
+	// Retry the handshake with a clean parser before deciding the firmware is
+	// wrong.
+	var err error
+	for attempt := 1; attempt <= bannerAttempts; attempt++ {
+		if attempt > 1 {
+			log.verbosef("no banner yet; retrying handshake (%d/%d)", attempt, bannerAttempts)
+			_ = port.ResetInputBuffer()
+			parser.Reset()
+			if !sleepContext(ctx, bannerRetryDelay) {
+				return ctx.Err()
+			}
+		}
+
+		log.verbosef("-> idle")
+		if werr := serialport.WriteCommand(port, proto.CmdIdle); werr != nil {
+			return fmt.Errorf("send idle: %w", werr)
+		}
+		log.verbosef("-> parms")
+		if werr := serialport.WriteCommand(port, proto.CmdParms); werr != nil {
+			return fmt.Errorf("send parms: %w", werr)
+		}
+		err = waitBanner(ctx, port, parser, log, stats)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, errFirmware) || ctx.Err() != nil || !errors.Is(err, errNoBanner) {
+			return err
+		}
 	}
-	log.verbosef("-> parms")
-	if err := serialport.WriteCommand(port, proto.CmdParms); err != nil {
-		return fmt.Errorf("send parms: %w", err)
-	}
-	if err := waitBanner(ctx, port, parser, log, stats); err != nil {
+	if err != nil {
 		return err
 	}
 	log.verbosef("-> chan %d", channel)
