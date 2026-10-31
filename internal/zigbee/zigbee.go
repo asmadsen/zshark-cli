@@ -7,8 +7,7 @@
 //
 // Network key discovery requires an unsecured MAC and NWK frame. An
 // APS-secured Transport-Key command can be decrypted when its Trust Center
-// link key is supplied; link, transport and load key transports are otherwise
-// ignored.
+// link key is supplied; key identifiers 0, 2 and 3 are supported.
 package zigbee
 
 import (

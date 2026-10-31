@@ -207,7 +207,8 @@ matches Wireshark and differs from the order in some older spec excerpts.
 this command. Clear frames are parsed directly; APS-secured frames are
 decrypted with a supplied link key, with the APS header and auxiliary security
 header as authenticated data and the extended source, frame counter and
-security control as the nonce. Other key types, frames secured at the MAC or
-NWK layer, and malformed/truncated frames are ignored. Clear commands need no
+security control as the nonce. Key identifiers 0, 2 and 3 use the link key
+directly or a keyed-hash derivation of it. Network-key-secured commands, frames
+secured at the MAC or NWK layer, and malformed/truncated frames are ignored. Clear commands need no
 key; APS-secured commands use only the supplied link key. The tool reports what
 was already in clear on the selected channel, or what that link key unlocks.

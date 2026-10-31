@@ -63,9 +63,11 @@ zshark keys --channel 15 --json | jq -r .key
 ## APS-secured transports
 
 `--trust-center-key` supplies one or more 16-byte Trust Center link keys. The
-keys command then decrypts Transport-Key commands secured at the APS layer with
-key identifier 0 and extracts the network key from the plaintext. The flag is
-repeatable so several keys can be tried.
+keys command then decrypts Transport-Key commands secured at the APS layer and
+extracts the network key from the plaintext. Key identifiers 0 (link key), 2
+(Key-Transport Key) and 3 (Key-Load Key) are handled; the latter two are derived
+from the supplied link key with the ZigBee keyed hash. The flag is repeatable so
+several keys can be tried.
 
 Many networks use the well-known ZigBee Alliance default:
 
@@ -89,8 +91,9 @@ produces no such command.
 ## What can be discovered
 
 Clear Transport-Key commands are readable directly. APS-secured commands are
-readable when their Trust Center link key is supplied. Commands protected by a
-different link, transport or load key, non-network key descriptors, and frames
-secured at the MAC or NWK layer are ignored. See
+readable when their Trust Center link key is supplied, including transports
+protected with the derived Key-Transport or Key-Load key. Commands encrypted
+with the network key itself, non-network key descriptors, and frames secured at
+the MAC or NWK layer are ignored. See
 [PROTOCOL.md](PROTOCOL.md#7-network-key-transport-sniffer-aid) for the frame
 layout and limitations.

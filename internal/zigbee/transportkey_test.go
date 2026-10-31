@@ -332,15 +332,15 @@ func encryptCCM(key [16]byte, nonce, aad, plain []byte, level uint8) (ct, mic []
 // securedAPSFrame builds a Transport-Key command protected at the APS layer
 // with a Trust Center link key. wireLevel is written to the frame (devices
 // commonly send 0); effectiveLevel is used for the CCM* transformation.
-func securedAPSFrame(tcKey [16]byte, wireLevel, effectiveLevel uint8, frameCounter uint32, extSrc [8]byte, keyType byte, networkKey [16]byte, seq byte, dst, src [8]byte) []byte {
+func securedAPSFrame(tcKey [16]byte, wireLevel, effectiveLevel, keyID uint8, frameCounter uint32, extSrc [8]byte, keyType byte, networkKey [16]byte, seq byte, dst, src [8]byte) []byte {
 	plain := []byte{apsCommandTransportKey, keyType}
 	plain = append(plain, networkKey[:]...)
 	plain = append(plain, seq)
 	plain = append(plain, dst[:]...)
 	plain = append(plain, src[:]...)
 
-	control := wireLevel&0x07 | 0x20         // key id 0 (link), extended nonce
-	apsHeader := []byte{0x21, 0x01, control} // command, security, APS counter
+	control := wireLevel&0x07 | keyID<<3 | 0x20 // extended nonce
+	apsHeader := []byte{0x21, 0x01, control}    // command, security, APS counter
 	apsHeader = binary.LittleEndian.AppendUint32(apsHeader, frameCounter)
 	apsHeader = append(apsHeader, extSrc[:]...)
 
@@ -353,7 +353,14 @@ func securedAPSFrame(tcKey [16]byte, wireLevel, effectiveLevel uint8, frameCount
 	binary.LittleEndian.PutUint32(nonce[8:12], frameCounter)
 	nonce[12] = controlEff
 
-	ct, mic := encryptCCM(tcKey, nonce[:], aad, plain, effectiveLevel)
+	encKey := tcKey
+	switch keyID {
+	case 2:
+		encKey = keyedHash(tcKey, 0x00)
+	case 3:
+		encKey = keyedHash(tcKey, 0x02)
+	}
+	ct, mic := encryptCCM(encKey, nonce[:], aad, plain, effectiveLevel)
 
 	frame := shortMAC(0x1a2b, 0x1234, 0x0000)
 	frame = append(frame, nwkHeader(0x0008, nil)...)
@@ -372,7 +379,7 @@ func TestExtractAPSLinkKeyTransport(t *testing.T) {
 	extSrc := [8]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}
 
 	for _, wireLevel := range []uint8{SecEncMIC32, SecNone} {
-		frame := securedAPSFrame(tcKey, wireLevel, SecEncMIC32, 0x01020304, extSrc,
+		frame := securedAPSFrame(tcKey, wireLevel, SecEncMIC32, 0, 0x01020304, extSrc,
 			byte(KeyTypeStandardNetwork), netKey, 7, dst, src)
 
 		key, ok := ExtractNetworkKey(frame, tcKey)
@@ -403,13 +410,44 @@ func TestExtractAPSLinkKeyTransport(t *testing.T) {
 func TestExtractAPSHighSecurityNetworkKey(t *testing.T) {
 	tcKey := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
 	netKey := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	frame := securedAPSFrame(tcKey, 0, SecEncMIC64, 99, [8]byte{9, 9, 9, 9, 9, 9, 9, 9},
+	frame := securedAPSFrame(tcKey, 0, SecEncMIC64, 0, 99, [8]byte{9, 9, 9, 9, 9, 9, 9, 9},
 		byte(KeyTypeHighSecurityNetwork), netKey, 2, [8]byte{}, [8]byte{})
 	key, ok := ExtractNetworkKey(frame, tcKey)
 	if !ok {
 		t.Fatal("ExtractNetworkKey = false, want true")
 	}
 	if key.KeyType != KeyTypeHighSecurityNetwork || key.Key != netKey {
+		t.Errorf("key = %+v", key)
+	}
+}
+
+func TestExtractAPSKeyTransportKey(t *testing.T) {
+	tcKey := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
+	netKey := [16]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
+	extSrc := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x01, 0x6a, 0x41, 0x0c}
+	frame := securedAPSFrame(tcKey, SecNone, SecEncMIC32, 2, 552963, extSrc,
+		byte(KeyTypeStandardNetwork), netKey, 4, [8]byte{}, [8]byte{})
+
+	key, ok := ExtractNetworkKey(frame, tcKey)
+	if !ok {
+		t.Fatal("ExtractNetworkKey = false, want true")
+	}
+	if key.Key != netKey || key.Sequence != 4 {
+		t.Errorf("key = %+v", key)
+	}
+}
+
+func TestExtractAPSKeyLoadKey(t *testing.T) {
+	tcKey := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
+	netKey := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	frame := securedAPSFrame(tcKey, SecNone, SecEncMIC64, 3, 7, [8]byte{8, 8, 8, 8, 8, 8, 8, 8},
+		byte(KeyTypeStandardNetwork), netKey, 1, [8]byte{}, [8]byte{})
+
+	key, ok := ExtractNetworkKey(frame, tcKey)
+	if !ok {
+		t.Fatal("ExtractNetworkKey = false, want true")
+	}
+	if key.Key != netKey {
 		t.Errorf("key = %+v", key)
 	}
 }

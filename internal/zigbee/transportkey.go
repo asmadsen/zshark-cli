@@ -181,18 +181,21 @@ func parseTransportKeyCommand(payload []byte) (NetworkKey, bool) {
 }
 
 // decryptAPSTransportKey decrypts the APS payload of a command secured with a
-// Trust Center link key (key identifier 0). The authenticated data is the APS
-// header followed by the auxiliary security header; the MIC covers both and
-// the plaintext. Devices commonly transmit security level 0 and use level 5
-// on air, so level 0 tries the encrypted levels in turn.
+// Trust Center link key. Key identifier 0 uses the link key directly; 2 and 3
+// derive the Key-Transport and Key-Load keys with the ZigBee keyed hash. The
+// authenticated data is the APS header followed by the auxiliary security
+// header; the MIC covers both and the plaintext. Devices commonly transmit
+// security level 0 and use level 5 on air, so level 0 tries the encrypted
+// levels in turn.
 func decryptAPSTransportKey(payload []byte, frame *Frame, keys [][16]byte) ([]byte, bool) {
 	if len(keys) == 0 || len(payload) < 3 {
 		return nil, false
 	}
 	control := payload[2]
-	if keyID := (control >> 3) & 0x03; keyID != 0 {
-		// Network, transport and load keys are either unknown here or need a
-		// derived key; only the Trust Center link key is supported.
+	keyID := (control >> 3) & 0x03
+	if keyID == 1 {
+		// A network-key-secured command needs the network key we are trying to
+		// discover.
 		return nil, false
 	}
 	off := 3
@@ -238,7 +241,14 @@ func decryptAPSTransportKey(payload []byte, frame *Frame, keys [][16]byte) ([]by
 		nonce[12] = controlEff
 
 		for i := range keys {
-			plain, ok := ccmStarDecrypt(keys[i][:], nonce[:], aad, payload[off:payloadEnd], payload[payloadEnd:], level)
+			key := keys[i]
+			switch keyID {
+			case 2: // Key-Transport Key
+				key = keyedHash(key, 0x00)
+			case 3: // Key-Load Key
+				key = keyedHash(key, 0x02)
+			}
+			plain, ok := ccmStarDecrypt(key[:], nonce[:], aad, payload[off:payloadEnd], payload[payloadEnd:], level)
 			if ok {
 				return plain, true
 			}
