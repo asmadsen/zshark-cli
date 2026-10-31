@@ -33,7 +33,7 @@ func TestParseKeysDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Channel != 11 || cfg.Port != "" || cfg.JSON || cfg.All || cfg.Verbose {
+	if cfg.Channel != 11 || cfg.Port != "" || len(cfg.TrustCenterKeys) != 0 || cfg.JSON || cfg.All || cfg.Verbose {
 		t.Errorf("unexpected default: %+v", cfg)
 	}
 }
@@ -51,6 +51,23 @@ func TestParseKeysAllFlags(t *testing.T) {
 	}
 	if cfg.Port != "/dev/ttyACM0" || cfg.Channel != 26 || !cfg.JSON || !cfg.All || !cfg.Verbose {
 		t.Errorf("config = %+v", cfg)
+	}
+}
+
+func TestParseKeysTrustCenterKey(t *testing.T) {
+	cfg, err := parseKeysArgs([]string{
+		"--trust-center-key", "5A:69:67:42:65:65:41:6C:6C:69:61:6E:63:65:30:39",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustCenterKeys) != 1 || string(cfg.TrustCenterKeys[0][:]) != "ZigBeeAlliance09" {
+		t.Errorf("trust center keys = %x", cfg.TrustCenterKeys)
+	}
+	for _, bad := range []string{"", "0011", "zz"} {
+		if _, err := parseKeysArgs([]string{"--trust-center-key", bad}, &bytes.Buffer{}); err == nil {
+			t.Errorf("trust center key %q accepted", bad)
+		}
 	}
 }
 

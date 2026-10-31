@@ -50,6 +50,9 @@ therefore contains key material and should be handled accordingly.
 # Watch the network's channel for an adopted device's network key.
 zshark keys --channel 15
 
+# Also decrypt APS-secured transports with the well-known Trust Center link key.
+zshark keys --channel 15 --trust-center-key 5a6967426565416c6c69616e63653039
+
 # Machine-readable output, including repeated transports.
 zshark keys --channel 15 --json --all
 
@@ -57,10 +60,37 @@ zshark keys --channel 15 --json --all
 zshark keys --channel 15 --json | jq -r .key
 ```
 
+## APS-secured transports
+
+`--trust-center-key` supplies one or more 16-byte Trust Center link keys. The
+keys command then decrypts Transport-Key commands secured at the APS layer with
+key identifier 0 and extracts the network key from the plaintext. The flag is
+repeatable so several keys can be tried.
+
+Many networks use the well-known ZigBee Alliance default:
+
+```
+5a6967426565416c6c69616e63653039
+```
+
+That is the ASCII string `ZigBeeAlliance09`; separators are optional. If the
+network uses a random Trust Center link key or an install-code-derived key, pass
+that key instead.
+
+```sh
+zshark keys --channel 15 \
+  --trust-center-key 5a6967426565416c6c69616e63653039
+```
+
+The network key itself is only visible if the capture contains the Transport-Key
+command sent while a device joins. A running network with no join in progress
+produces no such command.
+
 ## What can be discovered
 
-Only Transport-Key commands sent with APS security disabled are readable.
-Commands protected by the Trust Center Link Key are encrypted and ignored, as
-are non-network key descriptors and frames secured at the MAC or NWK layer. See
+Clear Transport-Key commands are readable directly. APS-secured commands are
+readable when their Trust Center link key is supplied. Commands protected by a
+different link, transport or load key, non-network key descriptors, and frames
+secured at the MAC or NWK layer are ignored. See
 [PROTOCOL.md](PROTOCOL.md#7-network-key-transport-sniffer-aid) for the frame
 layout and limitations.

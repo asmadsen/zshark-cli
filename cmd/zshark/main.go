@@ -91,11 +91,13 @@ commands:
               payloads.
       --no-zep disables UDP output and requires --pcap or --jsonl.
 
-  keys [--port PATH] [--channel N] [--json] [--all] [--verbose]
+  keys [--port PATH] [--channel N] [--trust-center-key HEX]
+       [--json] [--all] [--verbose]
       Listen for ZigBee APS Transport-Key commands that carry a network key
-      in clear and print each discovered key. Set --channel to the network's
-      channel. --json prints one JSON object per line. Repeats of the same key
-      are suppressed unless --all is given.
+      and print each discovered key. Set --channel to the network's channel.
+      --trust-center-key decrypts transports protected with that Trust Center
+      link key (repeatable). --json prints one JSON object per line. Repeats of
+      the same key are suppressed unless --all is given.
 
 exit codes:
   0 success

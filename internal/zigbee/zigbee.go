@@ -1,12 +1,14 @@
 // Package zigbee decodes IEEE 802.15.4 MAC, ZigBee NWK and APS headers.
 //
 // It provides frame decoding and NWK payload decryption with network keys for
-// the JSONL sink, and recognises cleartext APS Transport-Key commands that
-// carry a network key so the keys command can report it.
+// the JSONL sink, and recognises cleartext or APS-link-key-protected
+// Transport-Key commands that carry a network key so the keys command can
+// report it.
 //
-// Only frames that are not secured at the MAC, NWK or APS layer can be read
-// for key discovery. A network key protected by the well-known Trust Center
-// Link Key is therefore intentionally not reported.
+// Network key discovery requires an unsecured MAC and NWK frame. An
+// APS-secured Transport-Key command can be decrypted when its Trust Center
+// link key is supplied; link, transport and load key transports are otherwise
+// ignored.
 package zigbee
 
 import (
@@ -80,6 +82,7 @@ type Frame struct {
 	NWK *NWK
 
 	raw          []byte
+	nwkStart     int
 	auxStart     int
 	payloadStart int
 	control      byte
@@ -223,6 +226,7 @@ func (f *Frame) nwkPayload() []byte {
 }
 
 func (f *Frame) parseNWK(off int) error {
+	f.nwkStart = off
 	raw := f.raw
 	if len(raw) < off+2 {
 		return fmt.Errorf("truncated NWK frame control")
@@ -378,9 +382,11 @@ func (f *Frame) Decrypt(keys [][16]byte, level uint8) *Decryption {
 	}
 
 	control := f.control&^0x07 | level
-	aad := make([]byte, f.payloadStart)
-	copy(aad, f.raw[:f.payloadStart])
-	aad[f.auxStart] = control
+	// ZigBee authenticates the NWK header and auxiliary header, not the MAC
+	// header (see ZigBee spec 4.3.1.1). Wireshark applies the same rule.
+	aad := make([]byte, f.payloadStart-f.nwkStart)
+	copy(aad, f.raw[f.nwkStart:f.payloadStart])
+	aad[f.auxStart-f.nwkStart] = control
 
 	src := f.extSrcWire
 	if len(src) != 8 {

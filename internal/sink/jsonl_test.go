@@ -13,7 +13,7 @@ import (
 	"zshark/internal/zigbee"
 )
 
-const jsonlFrame = "6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225d771bbdc"
+const jsonlFrame = "6188012b1a000034120802000034121e2a2804030201dc8e95fffeac426a00aeb3b0a5f4788d9c9225217dd486"
 
 var jsonlKey = [16]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
 
@@ -100,7 +100,7 @@ func TestJSONLWithoutKeys(t *testing.T) {
 	if rec.Decryption == nil || rec.Decryption.Status != zigbee.DecryptNoKey {
 		t.Errorf("decryption = %+v", rec.Decryption)
 	}
-	if rec.NWK == nil || rec.NWK.Security == nil || rec.NWK.Security.MIC != "d771bbdc" {
+	if rec.NWK == nil || rec.NWK.Security == nil || rec.NWK.Security.MIC != "217dd486" {
 		t.Errorf("security = %+v", rec.NWK)
 	}
 }

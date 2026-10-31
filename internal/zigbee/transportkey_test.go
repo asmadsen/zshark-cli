@@ -2,6 +2,7 @@ package zigbee
 
 import (
 	"bytes"
+	"crypto/aes"
 	"encoding/binary"
 	"testing"
 )
@@ -292,4 +293,123 @@ func formatHex(addr [8]byte) string {
 		out = append(out, hexdigits[b>>4], hexdigits[b&0x0f])
 	}
 	return string(out)
+}
+
+// encryptCCM mirrors the CCM* transformation for test frames.
+func encryptCCM(key [16]byte, nonce, aad, plain []byte, level uint8) (ct, mic []byte) {
+	block, _ := aes.NewCipher(key[:])
+	ct = append([]byte(nil), plain...)
+	if Encrypted(level) {
+		var counter [16]byte
+		counter[0] = 1
+		copy(counter[1:14], nonce)
+		var stream [16]byte
+		for i := 0; i < len(ct); i += aes.BlockSize {
+			putUint16(counter[14:16], uint16(i/aes.BlockSize+1))
+			block.Encrypt(stream[:], counter[:])
+			for j := 0; j < aes.BlockSize && i+j < len(ct); j++ {
+				ct[i+j] ^= stream[j]
+			}
+		}
+	}
+	micLen := MICLen(level)
+	if micLen == 0 {
+		return ct, nil
+	}
+	mac := ccmMAC(block, nonce, aad, plain, micLen)
+	var a0 [16]byte
+	a0[0] = 1
+	copy(a0[1:14], nonce)
+	var s0 [16]byte
+	block.Encrypt(s0[:], a0[:])
+	mic = make([]byte, micLen)
+	for i := range mic {
+		mic[i] = mac[i] ^ s0[i]
+	}
+	return ct, mic
+}
+
+// securedAPSFrame builds a Transport-Key command protected at the APS layer
+// with a Trust Center link key. wireLevel is written to the frame (devices
+// commonly send 0); effectiveLevel is used for the CCM* transformation.
+func securedAPSFrame(tcKey [16]byte, wireLevel, effectiveLevel uint8, frameCounter uint32, extSrc [8]byte, keyType byte, networkKey [16]byte, seq byte, dst, src [8]byte) []byte {
+	plain := []byte{apsCommandTransportKey, keyType}
+	plain = append(plain, networkKey[:]...)
+	plain = append(plain, seq)
+	plain = append(plain, dst[:]...)
+	plain = append(plain, src[:]...)
+
+	control := wireLevel&0x07 | 0x20         // key id 0 (link), extended nonce
+	apsHeader := []byte{0x21, 0x01, control} // command, security, APS counter
+	apsHeader = binary.LittleEndian.AppendUint32(apsHeader, frameCounter)
+	apsHeader = append(apsHeader, extSrc[:]...)
+
+	controlEff := control&^0x07 | effectiveLevel
+	aad := append([]byte(nil), apsHeader...)
+	aad[2] = controlEff
+
+	var nonce [13]byte
+	copy(nonce[0:8], extSrc[:])
+	binary.LittleEndian.PutUint32(nonce[8:12], frameCounter)
+	nonce[12] = controlEff
+
+	ct, mic := encryptCCM(tcKey, nonce[:], aad, plain, effectiveLevel)
+
+	frame := shortMAC(0x1a2b, 0x1234, 0x0000)
+	frame = append(frame, nwkHeader(0x0008, nil)...)
+	frame = append(frame, apsHeader...)
+	frame = append(frame, ct...)
+	frame = append(frame, mic...)
+	frame = append(frame, 0x9e, 0x80) // RSSI, LQI with CRC OK
+	return frame
+}
+
+func TestExtractAPSLinkKeyTransport(t *testing.T) {
+	tcKey := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
+	netKey := [16]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	dst := [8]byte{0x00, 0x12, 0x4b, 0x00, 0x1a, 0x2b, 0x3c, 0x4d}
+	src := [8]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11}
+	extSrc := [8]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}
+
+	for _, wireLevel := range []uint8{SecEncMIC32, SecNone} {
+		frame := securedAPSFrame(tcKey, wireLevel, SecEncMIC32, 0x01020304, extSrc,
+			byte(KeyTypeStandardNetwork), netKey, 7, dst, src)
+
+		key, ok := ExtractNetworkKey(frame, tcKey)
+		if !ok {
+			t.Fatalf("wire level %d: ExtractNetworkKey = false, want true", wireLevel)
+		}
+		if key.Key != netKey || key.KeyType != KeyTypeStandardNetwork || key.Sequence != 7 {
+			t.Errorf("wire level %d: key = %+v", wireLevel, key)
+		}
+		if key.PAN != 0x1a2b || !key.HasDestShort || key.DestinationShort != 0x1234 || !key.HasSrcShort || key.SourceShort != 0x0000 {
+			t.Errorf("wire level %d: context = %+v", wireLevel, key)
+		}
+		if !key.HasSource || key.Source != src {
+			t.Errorf("wire level %d: source = %x, want %x", wireLevel, key.Source, src)
+		}
+
+		if _, ok := ExtractNetworkKey(frame); ok {
+			t.Errorf("wire level %d: secured frame accepted without a link key", wireLevel)
+		}
+		wrong := tcKey
+		wrong[0] ^= 0xff
+		if _, ok := ExtractNetworkKey(frame, wrong); ok {
+			t.Errorf("wire level %d: secured frame accepted with the wrong link key", wireLevel)
+		}
+	}
+}
+
+func TestExtractAPSHighSecurityNetworkKey(t *testing.T) {
+	tcKey := [16]byte{'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9'}
+	netKey := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	frame := securedAPSFrame(tcKey, 0, SecEncMIC64, 99, [8]byte{9, 9, 9, 9, 9, 9, 9, 9},
+		byte(KeyTypeHighSecurityNetwork), netKey, 2, [8]byte{}, [8]byte{})
+	key, ok := ExtractNetworkKey(frame, tcKey)
+	if !ok {
+		t.Fatal("ExtractNetworkKey = false, want true")
+	}
+	if key.KeyType != KeyTypeHighSecurityNetwork || key.Key != netKey {
+		t.Errorf("key = %+v", key)
+	}
 }

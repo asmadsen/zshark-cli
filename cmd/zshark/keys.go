@@ -147,7 +147,7 @@ func runKeys(ctx context.Context, cfg keysConfig, stdout, stderr io.Writer) int 
 	}
 
 	code := runDevice(ctx, deviceConfig{Port: cfg.Port, Channel: cfg.Channel}, log, &stats.captureStats, func(frame []byte) error {
-		key, ok := zigbee.ExtractNetworkKey(frame)
+		key, ok := zigbee.ExtractNetworkKey(frame, cfg.TrustCenterKeys...)
 		if !ok {
 			return nil
 		}

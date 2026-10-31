@@ -174,9 +174,10 @@ The original uses `deCONZ::DeviceEnumerator` plus `QSerialPortInfo`. For v0:
 
 When a device is adopted, the Trust Center sends it the network key in an APS
 Transport-Key command. The command normally sits inside an APS frame that is
-protected by the Trust Center Link Key, but while adopting a device it can be
-sent with APS security disabled, which leaves the key readable on air. The
-`keys` command decodes exactly that case.
+protected by the Trust Center Link Key, but while adopting a device it can also
+be sent with APS security disabled, which leaves the key readable on air. The
+`keys` command decodes the clear case directly and the APS-secured case when
+the Trust Center link key is supplied with `--trust-center-key`.
 
 Frame path for an unsecured transport (all fields **observed** in Wireshark for
 a synthetic frame built from the formats below):
@@ -203,7 +204,10 @@ Network Key), `zbee_aps.cmd.key`, `zbee_aps.cmd.seqno`, `zbee_aps.cmd.dst` and
 matches Wireshark and differs from the order in some older spec excerpts.
 
 `internal/zigbee` parses the MAC, NWK and APS headers only far enough to find
-this command. It rejects frames secured at any layer, other key types and
-malformed/truncated frames. Because the commands are unencrypted, no keys are
-stored or used to decrypt anything; the tool only reports what was already in
-clear on the selected channel.
+this command. Clear frames are parsed directly; APS-secured frames are
+decrypted with a supplied link key, with the APS header and auxiliary security
+header as authenticated data and the extended source, frame counter and
+security control as the nonce. Other key types, frames secured at the MAC or
+NWK layer, and malformed/truncated frames are ignored. Clear commands need no
+key; APS-secured commands use only the supplied link key. The tool reports what
+was already in clear on the selected channel, or what that link key unlocks.
