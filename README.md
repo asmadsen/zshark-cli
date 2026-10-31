@@ -59,8 +59,8 @@ zshark keys [--port PATH] [--channel N] [--trust-center-key HEX]
   protected with that Trust Center link key, including the well-known
   `ZigBeeAlliance09` key. Each new key is printed once; `--all` also prints
   repeats. `--json` switches to one JSON object per line (NDJSON) on stdout.
-  It does not emit ZEP. Keys protected by other link, transport or load keys
-  are ignored. See [docs/KEYS.md](docs/KEYS.md) for the text and JSON fields.
+  It does not emit ZEP. Network-key-secured transports and other key types are
+  ignored. See [docs/KEYS.md](docs/KEYS.md) for the text and JSON fields.
 - Ctrl-C or SIGTERM sends `idle` to the dongle, closes the sink(s), prints a
   packet/error summary to stderr and exits cleanly.
 
