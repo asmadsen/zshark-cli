@@ -89,6 +89,7 @@ internal/zigbee/       802.15.4 MAC/NWK/APS decoding, CCM* decryption and key di
 docs/PROTOCOL.md       reverse-engineered wire protocol
 docs/JSONL.md          JSON Lines capture output format
 docs/KEYS.md           keys command output and JSON schema
+docs/FOLLOWUPS.md      optional verification checks and known gaps
 ```
 
 ## Prerequisites
@@ -141,6 +142,9 @@ the archives and `checksums.txt`:
 git tag -a v0.1.0 -m "zshark v0.1.0"
 git push origin v0.1.0
 ```
+
+Remaining optional verification checks are listed in
+[docs/FOLLOWUPS.md](docs/FOLLOWUPS.md).
 
 Tags containing a hyphen (for example `v0.1.0-rc.1`) are published as
 prereleases. Builds use `CGO_ENABLED=0` and target linux/amd64, linux/arm64,
