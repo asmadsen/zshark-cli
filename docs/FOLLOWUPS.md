@@ -1,7 +1,7 @@
 # Verification follow-ups
 
 The core paths are verified on macOS with a ConBee II on stock deCONZ
-firmware:
+firmware, and the combined-sink capture in §1 is also verified on Linux:
 
 - startup handshake, including the retry when the port opens noisily
 - channel selection, capture, live ZEP, pcapng and JSONL
@@ -16,40 +16,54 @@ below are optional follow-ups, not release blockers.
 
 ## 1. All sinks at once
 
-pcapng, JSONL and ZEP have each been verified separately. Run all three
+Verified on Linux with a ConBee II on stock firmware and channel 25: 621
+frames, with `frames=`, `pcap=`, `jsonl=` and `zep=` all 621 and
+`dropped=0 errors=0 reconnects=0`. A light's ZCL OnOff Report Attributes
+changed from `00` (Off) to `01` (On).
+
+pcapng, JSONL and ZEP were previously verified separately. To run all three
 together and compare the counts:
 
 ```sh
-# Start a ZEP listener first so the UDP sink has a destination.
+# tshark captures but does not bind the port. Keep a real listener on 17754,
+# or the ICMP port-unreachable reply makes the UDP sink back off and drop ZEP
+# frames while pcapng and JSONL keep going. socat or any UDP listener works.
+socat -u UDP-RECV:17754 /dev/null &
+tshark -i lo -f 'udp port 17754' -w /tmp/zep.pcapng -q &
+
 ./zshark capture --channel 25 --pcap /tmp/all.pcapng --jsonl /tmp/all.jsonl \
   --network-key <network-key>
 ```
 
-Toggle a device, stop the capture, then compare the stats line with:
+Toggle a device and stop the capture with `SIGINT`, then compare the stats
+line with:
 
 ```sh
 tshark -r /tmp/all.pcapng | wc -l
 wc -l /tmp/all.jsonl
-jq -r 'select(.decryption.status == "ok") | .nwk.src' /tmp/all.jsonl | wc -l
+tshark -r /tmp/zep.pcapng -Y 'zep.type == 1' | wc -l
+jq -r 'select(.nwk.security != null) | .decryption.status' /tmp/all.jsonl \
+  | sort | uniq -c
 ```
 
-The pcapng and JSONL counts should match `frames=`/`pcap=` and `jsonl=`.
-Wireshark should show the same frames live.
+The sink counts should match `frames=`, `pcap=`, `jsonl=` and `zep=`, and
+`dropped=`, `errors=` and `reconnects=` should be zero. Wireshark should show
+the same frames live. Decryption failures for frames belonging to other PANs
+sharing the channel are expected.
 
 ## 2. Linux hardware parity
 
 The new startup retry, key discovery and CCM* changes were exercised on
-macOS. The code is platform-independent, but a Linux smoke test with the
-dongle is still worthwhile:
+macOS. `./zshark list` and the full three-sink capture (§1) now also pass on
+Linux with a ConBee II on stock deCONZ firmware. The `keys` path still needs a
+Linux run:
 
 ```sh
-./zshark list
-./zshark capture --channel 25 --no-zep --pcap /tmp/linux.pcapng
 ./zshark keys --channel 25 --trust-center-key <trust-center-link-key>
 ```
 
-Run the last command while a device joins and confirm the discovered key
-matches the coordinator's network key.
+Run it while a device joins and confirm the discovered key matches the
+coordinator's network key.
 
 ## 3. CLI edge cases
 
