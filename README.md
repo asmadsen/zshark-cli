@@ -119,6 +119,30 @@ additional integration test writes the sample's datagrams through the pcapng
 sink and checks the dissection with `tshark`; it is skipped when `tshark` is not
 installed.
 
+## CI and releases
+
+GitHub Actions runs on every pull request and on `main`:
+
+- **CI** (`.github/workflows/ci.yml`) checks formatting, runs `go vet` and
+  `go test` on Linux and macOS, and cross-builds every release target.
+- **Snapshot** (`.github/workflows/snapshot.yml`) runs on every push to `main`
+  and uploads `zshark_snapshot-<sha>_<os>_<arch>.tar.gz` artifacts for 30 days,
+  plus a combined bundle with `checksums.txt`.
+
+Pushing a `v*` tag builds the same targets and publishes a GitHub release with
+the archives and `checksums.txt`:
+
+```
+git tag -a v0.1.0 -m "zshark v0.1.0"
+git push origin v0.1.0
+```
+
+Tags containing a hyphen (for example `v0.1.0-rc.1`) are published as
+prereleases. Builds use `CGO_ENABLED=0` and target linux/amd64, linux/arm64,
+linux/armv7, darwin/amd64 and darwin/arm64. macOS archives are not signed or
+notarized; if Gatekeeper blocks a downloaded binary, remove the quarantine
+attribute with `xattr -d com.apple.quarantine zshark`.
+
 Typical use:
 
 ```

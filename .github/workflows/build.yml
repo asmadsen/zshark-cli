@@ -1,0 +1,59 @@
+name: Build
+
+# Reusable build used by the release and snapshot workflows. It produces one
+# archive per target and always runs on Linux, cross-compiling with CGO off.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version string used in archive and artifact names
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, label: amd64}
+          - {goos: linux, goarch: arm64, label: arm64}
+          - {goos: linux, goarch: arm, goarm: "7", label: armv7}
+          - {goos: darwin, goarch: amd64, label: amd64}
+          - {goos: darwin, goarch: arm64, label: arm64}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ inputs.version }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          name="zshark_${VERSION}_${GOOS}_${LABEL}"
+          mkdir -p "dist/${name}"
+          go build -trimpath -ldflags="-s -w" -o "dist/${name}/zshark" ./cmd/zshark
+          cp README.md "dist/${name}/"
+          cp -R docs "dist/${name}/docs"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          rm -rf "dist/${name}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zshark_${{ inputs.version }}_${{ matrix.goos }}_${{ matrix.label }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
