@@ -3,6 +3,7 @@
 /dist/
 *.pcap
 *.pcapng
+*.jsonl
 *.test
 coverage.out
 .DS_Store
