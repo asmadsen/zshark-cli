@@ -12,8 +12,6 @@ import (
 	"zshark/internal/zep"
 )
 
-const defaultSample = "/tmp/opencode/zshark/zep-sample.pcap"
-
 type goldenFrame struct {
 	zep     []byte
 	ntp     uint64
@@ -23,17 +21,17 @@ type goldenFrame struct {
 }
 
 func sampleCapturePath() string {
-	if path := os.Getenv("ZSHARK_SAMPLE"); path != "" {
-		return path
-	}
-	return defaultSample
+	return os.Getenv("ZSHARK_SAMPLE")
 }
 
 // TestGoldenReplaySample reconstructs the serial envelope for every data frame
-// in the real ConBee II capture, decodes it with the streaming parser, rebuilds
+// in a real ConBee II capture, decodes it with the streaming parser, rebuilds
 // the ZEP datagram, and compares it byte-for-byte with the captured datagram.
 func TestGoldenReplaySample(t *testing.T) {
 	path := sampleCapturePath()
+	if path == "" {
+		t.Skip("ZSHARK_SAMPLE not set")
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		t.Skipf("sample capture not present: %s", path)

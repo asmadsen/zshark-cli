@@ -1,12 +1,15 @@
 # `keys` output
 
-`zshark keys` listens for unsecured APS Transport-Key commands and prints each
-network key it discovers. Set `--channel` to the network's channel. The command
-does not emit ZEP and prints packet statistics to stderr when it exits.
+`zshark keys` listens for APS Transport-Key commands and prints each network key
+it discovers. Cleartext commands are decoded directly; `--trust-center-key`
+decrypts commands protected at the APS layer with a Trust Center link key. Set
+`--channel` to the network's channel. The command does not emit ZEP and prints
+packet statistics to stderr when it exits.
 
 By default each distinct key transport is printed once. A repeat is the same
-key sent to the same destination with the same key sequence number. `--all`
-prints repeats too, which is useful for observing retries or multiple deliveries.
+key sent on the same PAN to the same destination with the same key sequence
+number. `--all` prints repeats too, which is useful for observing retries or
+multiple deliveries.
 
 `--json` switches stdout from the text format below to one JSON object per line
 (NDJSON). Logging and statistics stay on stderr.

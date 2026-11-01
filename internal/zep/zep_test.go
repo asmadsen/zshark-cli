@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildHeaderBytes(t *testing.T) {
-	// First data datagram from /tmp/opencode/zshark/zep-sample.pcap.
+	// First data datagram from a real ConBee II ZEP capture.
 	frame, _ := hex.DecodeString("6188007fa300009f2d091a000050de1e92490323fefff55e156a57d0deb938c1a4281e6dd7056a42acfeff958edc00ea0b75df48f99c579e80")
 	wantHeader, _ := hex.DecodeString("455802010b00000000ee8f2e046758c08b000000ab0000000000000000000039")
 

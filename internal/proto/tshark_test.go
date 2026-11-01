@@ -28,6 +28,9 @@ func TestPcapngDissectsWithTshark(t *testing.T) {
 		t.Skipf("tshark not available: %v", err)
 	}
 	path := sampleCapturePath()
+	if path == "" {
+		t.Skip("ZSHARK_SAMPLE not set")
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		t.Skipf("sample capture not present: %s", path)

@@ -116,14 +116,36 @@ GOOS=darwin GOARCH=amd64 go build -o zshark-darwin-amd64 ./cmd/zshark
 Tests cover envelope framing and resynchronisation, ZEP header bytes, pcapng
 block structure and IPv4 checksums, JSONL structure, 802.15.4/NWK header
 decoding, CCM* decryption vectors, IEEE 802.15.4/NWK/APS decoding of network
-key transports (including secured and malformed frames), flag validation, and a
-golden replay of `/tmp/opencode/zshark/zep-sample.pcap`. The replay test rebuilds
-every data datagram from a synthetic serial stream and compares the result
-byte-for-byte with the real capture; it is skipped when the sample file is
-absent. Set `ZSHARK_SAMPLE=/path/to/capture.pcap` to use another sample. An
-additional integration test writes the sample's datagrams through the pcapng
-sink and checks the dissection with `tshark`; it is skipped when `tshark` is not
-installed.
+key transports (including secured and malformed frames), and flag validation.
+
+Two optional integration tests in `internal/proto` run against a real ZEP pcap
+capture when `ZSHARK_SAMPLE=/path/to/capture.pcap` is set (and skip otherwise):
+a golden replay test that rebuilds every data datagram from a synthetic serial
+stream and compares it byte-for-byte with the capture, and a `tshark` test that
+writes the datagrams through the pcapng sink and verifies the dissection
+(also skipped when `tshark` is not installed).
+
+Remaining optional verification checks are listed in
+[docs/FOLLOWUPS.md](docs/FOLLOWUPS.md).
+
+## Examples
+
+```
+./zshark list
+./zshark capture --channel 15
+./zshark capture --no-zep --pcap zigbee.pcapng
+./zshark capture --no-zep --jsonl zigbee.jsonl
+./zshark capture --no-zep --jsonl - --network-key 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
+./zshark capture --dest 192.0.2.10:17754 --verbose
+./zshark keys --channel 15
+./zshark keys --channel 15 --trust-center-key 5a6967426565416c6c69616e63653039
+./zshark keys --channel 15 --json
+```
+
+In Wireshark, listen on UDP port 17754 or open the pcapng file directly. The
+capture dissects as `zep -> zigbee`. The `keys` command is for the adoption
+moment: it prints the network key while a device is being joined, so it can be
+used before Wireshark has the key configured.
 
 ## CI and releases
 
@@ -143,40 +165,8 @@ git tag -a v0.1.0 -m "zshark v0.1.0"
 git push origin v0.1.0
 ```
 
-Remaining optional verification checks are listed in
-[docs/FOLLOWUPS.md](docs/FOLLOWUPS.md).
-
 Tags containing a hyphen (for example `v0.1.0-rc.1`) are published as
 prereleases. Builds use `CGO_ENABLED=0` and target linux/amd64, linux/arm64,
 linux/armv7, darwin/amd64 and darwin/arm64. macOS archives are not signed or
 notarized; if Gatekeeper blocks a downloaded binary, remove the quarantine
 attribute with `xattr -d com.apple.quarantine zshark`.
-
-Typical use:
-
-```
-./zshark list
-./zshark capture --channel 15
-./zshark capture --no-zep --pcap zigbee.pcapng
-./zshark capture --no-zep --jsonl zigbee.jsonl
-./zshark capture --no-zep --jsonl - --network-key 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff
-./zshark capture --dest 192.0.2.10:17754 --verbose
-./zshark keys --channel 15
-./zshark keys --channel 15 --trust-center-key 5a6967426565416c6c69616e63653039
-./zshark keys --channel 15 --json
-```
-
-In Wireshark, listen on UDP port 17754 or open the pcapng file directly. The
-capture dissects as `zep -> zigbee`. The `keys` command is for the adoption
-moment: it prints the network key while a device is being joined, so it can be
-used before Wireshark has the key configured.
-
-## Reference material
-
-The original binary, firmware and a real capture live on the build host. They
-are provenance for the protocol notes and are not runtime inputs: the tool never
-reads them, and tests that use the capture skip when it is absent.
-
-- `/usr/bin/zshark` (unstripped armhf Qt5 binary)
-- `/tmp/opencode/zshark/zep-sample.pcap` (real ConBee II capture)
-- `/usr/share/zshark/fw/` (firmware images; not used by this tool)

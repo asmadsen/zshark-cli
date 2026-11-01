@@ -1,9 +1,8 @@
 # Wire protocol (reverse-engineered)
 
-Source: `/usr/bin/zshark` 1.00.06 (ELF32 armhf, unstripped) and a real ConBee II
-capture in `/tmp/opencode/zshark/zep-sample.pcap`. Symbols referenced below are
-from the shipped binary. These paths are build-host provenance, not runtime
-dependencies; the sample-based tests skip when the capture is absent.
+Source: dresden elektronik `zshark` 1.00.06 (ELF32 armhf, unstripped) and a live
+ConBee II ZEP capture. Symbols and addresses referenced below are from that
+binary.
 
 Confidence markers: **observed** = seen in a capture or decoded from code;
 **inferred** = best reading of disassembly; **unconfirmed** = must be validated.
@@ -30,17 +29,12 @@ On open the app sends `\nidle\n` then `\nparms\n`. **Observed**
 
 ### Text replies (dongle → host)
 
-The firmware (`sniffer_v1_0.bin`) contains these formats:
+The dedicated sniffer firmware (`sniffer_v1_0.bin`) contains these formats:
 
 - `Sniffer V%s [%s]` — banner with version and platform
 - `Channel %u`, `IDLE`
-- `fail` / `fail!` — invalid state or command; the app treats this as
+- `fail` / `fail!` — invalid state or command; the original GUI treats this as
   “no or wrong firmware” and offers to flash
-
-Unknown: exact ConBee II banner string and startup timing. Treat any banner
-containing `Sniffer` as success; treat `fail` or silence beyond ~2 s per
-handshake attempt as failure. The CLI retries the handshake a few times because
-a freshly opened CDC port can reset the dongle or still be draining frames.
 
 ### Stock ConBee II response (measured live)
 
@@ -65,7 +59,10 @@ Receiving...OK
 ```
 
 The CLI accepts either a `Sniffer` banner or a line containing `PLATFORM:` as
-success. **Observed** (live, 2026-10-30).
+success, and treats `fail` or silence beyond ~2 s per handshake attempt as
+failure. Because a freshly opened CDC port can reset the dongle or still be
+draining frames, the CLI retries the handshake up to three times before giving
+up. **Observed** (live, 2026-10-30).
 
 ## 3. Binary frame envelope (dongle → host)
 
@@ -148,13 +145,13 @@ Wireshark decodes the capture as `ZEPv2 -> ZigBee` with
 
 ## 5. Capture file output
 
-The original does not write files; the sample pcap was produced by wrapping the
-ZEP datagrams in synthetic Ethernet/IPv4/UDP headers. Do the same for pcapng:
+The original GUI only emits UDP; `--pcap FILE` wraps each ZEP datagram in
+synthetic Ethernet/IPv4/UDP headers inside a pcapng container:
 
 - pcapng SHB + IDB (link type 1, Ethernet) + one EPB per frame.
 - Ethernet II → IPv4 (proto 17) → UDP (src 48311, dst 17754) → ZEP payload.
-- Compute the IPv4 header checksum; leave the UDP checksum 0 (allowed for IPv4).
-- Timestamps from the ZEP header.
+- IPv4 header checksum computed; UDP checksum left at 0 (valid for IPv4).
+- Timestamps taken from the ZEP header.
 
 This lets `zshark capture --no-zep --pcap out.pcapng` work with no listener.
 
@@ -164,11 +161,12 @@ See [JSONL.md](JSONL.md).
 
 ## 6. Device discovery
 
-The original uses `deCONZ::DeviceEnumerator` plus `QSerialPortInfo`. For v0:
+The original GUI uses `deCONZ::DeviceEnumerator` plus `QSerialPortInfo`.
+`zshark` enumerates candidate serial ports directly:
 
-- Linux: `/dev/ttyACM*`; prefer the port whose USB IDs are `1cf1:0030`.
-- macOS: `/dev/tty.usbmodem*` and `/dev/cu.usbmodem*`.
-- Always allow an explicit `--port`.
+- Linux: `/dev/ttyACM*`; prefers the port whose sysfs USB IDs match `1cf1:0030`.
+- macOS: `/dev/cu.usbmodem*` and `/dev/tty.usbmodem*` (preferring `/dev/cu.*`).
+- `--port PATH` always overrides auto-detection.
 
 ## 7. Network key transport (sniffer aid)
 
